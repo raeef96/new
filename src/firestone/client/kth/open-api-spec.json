@@ -1,0 +1,1035 @@
+{
+    "openapi": "3.0.0",
+    "info": {
+      "title": "Game API",
+      "version": "1.0.0",
+      "description": "API for firestone"
+    },
+    "paths": {
+      "/engine-settings": {
+        "post": {
+          "summary": "Check engine capabilities and settings",
+          "operationId": "engine-settings",
+          "responses": {
+            "200": {
+              "description": "Successful response",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "object",
+                    "properties": {
+                      "supports-undo": {
+                        "type": "boolean"
+                      },
+                      "supports-redo": {
+                        "type": "boolean"
+                      },
+                      "audio": {
+                        "type": "string",
+                        "pattern": "auto|events",
+                        "example": "events"
+                      },
+                      "background-volume": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 100
+                      },
+                      "effect-volume": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 100
+                      }
+                    },
+                    "required": ["supports-undo", "supports-redo", "audio"]
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/create-game": {
+        "post": {
+          "summary": "Create a new game",
+          "operationId": "create-game",
+          "requestBody": {
+            "description": "Details of the game to be created",
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "game": {
+                      "type": "array",
+                      "description": "Array of players with optional game data",
+                      "maxItems": 2,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "hand": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "description": "Name of card"
+                            },
+                            "example": ["Sheep"]
+                          },
+                          "deck": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "description": "Name of card"
+                            },
+                            "example": ["Boulderfist Ogre"]
+                          },
+                          "board": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "description": "Name of minion"
+                            },
+                            "example": ["Loot Hoarder"]
+                          },
+                          "hero": {
+                            "type": "string",
+                            "example": "Jaina Proudmoore",
+                            "description": "Name of hero"
+                          },
+                          "mana": {
+                            "type": "integer",
+                            "example": 10,
+                            "description": "Starting mana"
+                          },
+                          "max-mana": {
+                            "type": "integer",
+                            "example": 10,
+                            "description": "Starting maximum mana"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "description": "Successful response",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/game-state"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/end-turn": {
+        "post": {
+          "summary": "End turn",
+          "operationId": "end-turn",
+          "responses": {
+            "200": {
+              "description": "Successful response",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/game-state"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/attack": {
+        "post": {
+          "summary": "Attack",
+          "operationId": "attack",
+          "requestBody": {
+            "description": "Attack details",
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "attacker-id": {
+                      "type": "string"
+                    },
+                    "target-id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["attacker-id", "target-id"]
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "description": "Successful response",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/game-state"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/play-minion-card": {
+        "post": {
+          "summary": "Play a minion card",
+          "operationId": "play-minion-card",
+          "requestBody": {
+            "description": "Card details",
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "card-id": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "type": "number"
+                    },
+                    "target-id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["card-id", "position"]
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "description": "Successful response",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/game-state"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/play-weapon-card": {
+        "post": {
+          "summary": "Play a weapon card",
+          "operationId": "play-weapon-card",
+          "requestBody": {
+            "description": "Card details",
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "card-id": {
+                      "type": "string"
+                    },
+                    "target-id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["card-id"]
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "description": "Successful response",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/game-state"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/play-hero-card": {
+        "post": {
+          "summary": "Play a hero card",
+          "operationId": "play-hero-card",
+          "requestBody": {
+            "description": "Card details",
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "card-id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["card-id"]
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "description": "Successful response",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/game-state"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/play-spell-card": {
+        "post": {
+          "summary": "Play a spell card",
+          "operationId": "play-spell-card",
+          "requestBody": {
+            "description": "Card details",
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "card-id": {
+                      "type": "string"
+                    },
+                    "target-id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["card-id"]
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "description": "Successful response",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/game-state"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/use-hero-power": {
+        "post": {
+          "summary": "Use a hero power",
+          "operationId": "use-hero-power",
+          "requestBody": {
+            "description": "Hero power details",
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "target-id": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "description": "Successful response",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/game-state"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "components": {
+      "schemas": {
+        "game-state": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "example": "the-game-id"
+            },
+            "action-index": {
+              "type": "number",
+              "description": "increases by one for each action the user has done, like ending the turn, attacking, playing a card, ...",
+              "example": 0
+            },
+            "player-in-turn": {
+              "type": "string",
+              "description": "p1 or p2",
+              "example": "p1"
+            },
+            "players": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/player"
+              }
+            },
+            "event": {
+              "type": "object"
+            },
+            "game-blocker": {
+              "type": "object"
+            }
+          },
+          "required": ["id", "action-index", "player-in-turn", "players"]
+        },
+        "player": {
+          "type": "object",
+          "properties": {
+            "hand": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/card-in-hand"
+              }
+            },
+            "deck-size": {
+              "type": "number",
+              "example": 5
+            },
+            "board-entities": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/board-entity"
+              }
+            },
+            "hero": {
+              "$ref": "#/components/schemas/hero"
+            },
+            "active-secrets": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/secret"
+              }
+            },
+            "id": {
+              "type": "string",
+              "example": "p1"
+            },
+            "active-quest": {
+              "$ref": "#/components/schemas/quest"
+            }
+          },
+          "required": ["board-entities", "active-secrets", "deck-size", "hand", "hero", "id"]
+        },
+        "board-entity": {
+          "oneOf": [
+            { "$ref": "#/components/schemas/minion" },
+            { "$ref": "#/components/schemas/permanent" }
+          ]
+        },
+        "secret": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "owner-id": {
+              "type": "string",
+              "example": "p1"
+            },
+            "class": {
+              "$ref": "#/components/schemas/class"
+            },
+            "entity-type": {
+              "type": "string",
+              "pattern": "secret",
+              "example": "secret"
+            },
+            "rarity": {
+              "$ref": "#/components/schemas/rarity"
+            },
+            "original-mana-cost": {
+              "type": "number"
+            },
+            "description": {
+              "type": "string"
+            }
+          },
+          "required": ["name", "id", "entity-type", "owner-id", "class", "rarity", "original-mana-cost", "description"]
+        },
+        "quest": {
+          "type": "object",
+          "properties": {
+            "card": {
+              "$ref": "#/components/schemas/card"
+            },
+            "reward-card": {
+              "$ref": "#/components/schemas/card"
+            },
+            "id": {
+              "type": "string"
+            },
+            "owner-id": {
+              "type": "string",
+              "example": "p1"
+            },
+            "entity-type": {
+              "type": "string",
+              "pattern": "quest",
+              "example": "quest"
+            },
+            "progress": {
+              "type": "object",
+              "properties": {
+                "counter": {
+                  "type": "number"
+                },
+                "goal": {
+                  "type": "number"
+                }
+              },
+              "required": ["counter", "goal"]
+            }
+          },
+          "required": ["card", "reward-card", "id", "owner-id", "entity-type", "progress"]
+        },
+        "minion": {
+          "type": "object",
+          "properties": {
+            "attack": {
+              "type": "number"
+            },
+            "can-attack": {
+              "type": "boolean"
+            },
+            "entity-type": {
+              "type": "string",
+              "pattern": "minion",
+              "example": "minion"
+            },
+            "health": {
+              "type": "number"
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "mana-cost": {
+              "type": "number"
+            },
+            "max-health": {
+              "type": "number"
+            },
+            "original-attack": {
+              "type": "number"
+            },
+            "original-health": {
+              "type": "number"
+            },
+            "owner-id": {
+              "type": "string",
+              "example": "p1"
+            },
+            "position": {
+              "type": "number"
+            },
+            "set": {
+              "$ref": "#/components/schemas/set"
+            },
+            "sleepy": {
+              "type": "boolean"
+            },
+            "states": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/state"
+              }
+            },
+            "valid-attack-ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "class": {
+              "$ref": "#/components/schemas/class"
+            },
+            "description": {
+              "type": "string"
+            },
+            "display-name": {
+              "type": "string"
+            },
+            "external-id": {
+              "type": "string"
+            },
+            "rarity": {
+              "$ref": "#/components/schemas/rarity"
+            }
+          },
+          "required": ["attack", "can-attack","entity-type", "health", "id", "name", "mana-cost", "max-health", "original-attack", "original-health", "owner-id", "position", "set", "sleepy", "states", "valid-attack-ids"]
+        },
+        "permanent": {
+          "type": "object",
+          "properties": {
+            "entity-type": {
+              "type": "string",
+              "pattern": "permanent",
+              "example": "permanent"
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "owner-id": {
+              "type": "string",
+              "example": "p1"
+            },
+            "position": {
+              "type": "number"
+            },
+            "set": {
+              "$ref": "#/components/schemas/set"
+            },
+            "class": {
+              "$ref": "#/components/schemas/class"
+            },
+            "rarity": {
+              "$ref": "#/components/schemas/rarity"
+            },
+            "description": {
+              "type": "string"
+            },
+            "display-name": {
+              "type": "string"
+            },
+            "external-id": {
+              "type": "string"
+            }
+          },
+          "required": ["entity-type", "id", "name", "owner-id", "position", "set"]
+        },
+        "hero": {
+          "type": "object",
+          "properties": {
+            "armor": {
+              "type": "number"
+            },
+            "owner-id": {
+              "type": "string",
+              "example": "p1"
+            },
+            "entity-type": {
+              "type": "string",
+              "example": "hero"
+            },
+            "attack": {
+              "type": "number"
+            },
+            "can-attack": {
+              "type": "boolean"
+            },
+            "health": {
+              "type": "number"
+            },
+            "id": {
+              "type": "string"
+            },
+            "mana": {
+              "type": "number"
+            },
+            "max-health": {
+              "type": "number"
+            },
+            "max-mana": {
+              "type": "number"
+            },
+            "name": {
+              "type": "string"
+            },
+            "states": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/state"
+              }
+            },
+            "valid-attack-ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "weapon": {
+              "$ref": "#/components/schemas/weapon"
+            },
+            "hero-power": {
+              "$ref": "#/components/schemas/hero-power"
+            },
+            "class": {
+              "$ref": "#/components/schemas/class"
+            }
+          },
+          "required": ["armor", "owner-id", "entity-type", "attack", "can-attack", "health", "id", "mana", "max-health", "max-mana", "name", "states", "valid-attack-ids"]
+        },
+        "weapon": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "owner-id": {
+              "type": "string",
+              "example": "p1"
+            },
+            "durability": {
+              "type": "number"
+            },
+            "entity-type": {
+              "type": "string",
+              "pattern": "weapon",
+              "example": "weapon"
+            },
+            "original-durability": {
+              "type": "number"
+            },
+            "max-durability": {
+              "type": "number"
+            },
+            "attack": {
+              "type": "number"
+            },
+            "original-attack": {
+              "type": "number"
+            },
+            "states": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/state"
+              }
+            },
+            "rarity": {
+              "$ref": "#/components/schemas/rarity"
+            },
+            "set": {
+              "$ref": "#/components/schemas/set"
+            },
+            "class": {
+              "$ref": "#/components/schemas/class"
+            }
+          },
+          "required": ["name", "owner-id", "durability", "entity-type", "original-durability", "max-durability", "attack", "original-attack", "states", "rarity", "set", "class"]
+        },
+        "hero-power": {
+          "type": "object",
+          "properties": {
+            "can-use": {
+              "type": "boolean"
+            },
+            "owner-id": {
+              "type": "string",
+              "example": "p1"
+            },
+            "entity-type": {
+              "type": "string",
+              "pattern": "hero-power",
+              "example": "hero-power"
+            },
+            "has-used-your-turn": {
+              "type": "boolean"
+            },
+            "name": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "mana-cost": {
+              "type": "number"
+            },
+            "original-mana-cost": {
+              "type": "number"
+            },
+            "valid-target-ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": ["can-use", "owner-id", "entity-type", "has-used-your-turn", "name", "description"]
+        },
+        "class": {
+          "type": "string",
+          "pattern": "druid|hunter|mage|paladin|priest|rogue|shaman|warlock|warrior",
+          "example": "druid"
+        },
+        "class-group": {
+          "type": "string",
+          "pattern": "grimy-goons|jade-lotus|kabal",
+          "example": "jade-lotus"
+        },
+        "race": {
+          "type": "string",
+          "pattern": "elemental|beast|demon|murloc|mech|dragon|pirate|all|totem",
+          "example": "beast"
+        },
+        "rarity": {
+          "type": "string",
+          "pattern": "common|rare|epic|legendary",
+          "example": "legendary"
+        },
+        "set": {
+          "type": "string",
+          "pattern": "basic|classic|custom|hall-of-fame|curse-of-naxxramas|goblins-vs-gnomes|blackrock-mountain|the-grand-tournament|the-league-of-explorers|whispers-of-the-old-gods|one-night-in-karazhan|mean-streets-of-gadgetzan|journey-to-un'goro|knights-of-the-frozen-throne|kobolds-and-catacombs|the-witchwood|the-boomsday-project",
+          "example": "classic"
+        },
+        "state": {
+          "type": "string",
+          "pattern": "aura|deathrattle|divine-shield|effect|elusive|enrage|frozen|immune|inspire|lifesteal|mega-windfury|poisonous|silenced|spell-damage|stealth|taunt|windfury",
+          "example": "deathrattle"
+        },
+        "card": {
+          "oneOf": [
+            { "$ref": "#/components/schemas/minion-card" },
+            { "$ref": "#/components/schemas/spell-card" },
+            { "$ref": "#/components/schemas/weapon-card" },
+            { "$ref": "#/components/schemas/hero-card" }
+          ]
+        },
+        "minion-card": {
+          "type": "object",
+          "required": [
+            "entity-type",
+            "name",
+            "mana-cost",
+            "original-mana-cost",
+            "type"
+          ],
+          "properties": {
+            "entity-type": {
+              "type": "string",
+              "pattern": "card",
+              "example": "card"
+            },
+            "name": { "type": "string" },
+            "mana-cost": { "type": "integer" },
+            "original-mana-cost": { "type": "integer" },
+            "type": { "type": "string", "pattern": "minion", "example" : "minion" },
+            "class": {
+              "$ref": "#/components/schemas/class"
+            },
+            "owner-id": { "type": "string" },
+            "id": { "type": "string" },
+            "attack": { "type": "integer" },
+            "original-attack": { "type": "integer" },
+            "health": { "type": "integer" },
+            "original-health": { "type": "integer" },
+            "class-group": {
+              "$ref": "#/components/schemas/class-group"
+            },
+            "playable": { "type": "boolean" },
+            "rarity": {
+              "$ref": "#/components/schemas/rarity"
+            },
+            "description": { "type": "string" },
+            "valid-target-ids": { "type": "array", "items": { "type": "string" } },
+            "set": {
+              "$ref": "#/components/schemas/set"
+            },
+            "race": {
+              "$ref": "#/components/schemas/race"
+            },
+            "special-effect-active": { "type": "boolean" }
+          }
+        },
+        "spell-card": {
+          "type": "object",
+          "required": [
+            "entity-type",
+            "name",
+            "mana-cost",
+            "original-mana-cost",
+            "type"
+          ],
+          "properties": {
+            "entity-type": { "type": "string", "pattern": "card", "example": "card" },
+            "name": { "type": "string" },
+            "mana-cost": { "type": "integer" },
+            "original-mana-cost": { "type": "integer" },
+            "type": { "type": "string", "pattern": "spell", "example": "spell" },
+            "class": {
+              "$ref": "#/components/schemas/class"
+            },
+            "owner-id": { "type": "string" },
+            "id": { "type": "string" },
+            "playable": { "type": "boolean" },
+            "rarity": {
+              "$ref": "#/components/schemas/rarity"
+            },
+            "set": {
+              "$ref": "#/components/schemas/set"
+            },
+            "description": { "type": "string" },
+            "valid-target-ids": { "type": "array", "items": { "type": "string" } },
+            "special-effect-active": { "type": "boolean" }
+          }
+        },
+        "weapon-card": {
+          "type": "object",
+          "required": [
+            "entity-type",
+            "name",
+            "mana-cost",
+            "original-mana-cost",
+            "type"
+          ],
+          "properties": {
+            "entity-type": { "type": "string", "pattern": "card", "example": "card" },
+            "name": { "type": "string" },
+            "mana-cost": { "type": "integer" },
+            "original-mana-cost": { "type": "integer" },
+            "type": { "type": "string", "pattern": "weapon", "example": "weapon" },
+            "class": {
+              "$ref": "#/components/schemas/class"
+            },
+            "owner-id": { "type": "string" },
+            "id": { "type": "string" },
+            "attack": { "type": "integer" },
+            "original-attack": { "type": "integer" },
+            "durability": { "type": "integer" },
+            "original-durability": { "type": "integer" },
+            "playable": { "type": "boolean" },
+            "rarity": { "$ref": "#/components/schemas/rarity" },
+            "set": { "$ref": "#/components/schemas/set" },
+            "description": { "type": "string" },
+            "valid-target-ids": { "type": "array", "items": { "type": "string" } },
+            "special-effect-active": { "type": "boolean" }
+          }
+        },
+        "hero-card": {
+          "type": "object",
+          "required": [
+            "entity-type",
+            "name",
+            "mana-cost",
+            "original-mana-cost",
+            "type"
+          ],
+          "properties": {
+            "entity-type": { "type": "string", "pattern": "card", "example": "card" },
+            "name": { "type": "string" },
+            "mana-cost": { "type": "integer" },
+            "original-mana-cost": { "type": "integer" },
+            "type": { "type": "string", "pattern": "hero", "example": "hero" },
+            "class": { "$ref": "#/components/schemas/class" },
+            "owner-id": { "type": "string" },
+            "id": { "type": "string" },
+            "armor": { "type": "integer" },
+            "playable": { "type": "boolean" },
+            "set": { "$ref": "#/components/schemas/set" },
+            "description": { "type": "string" },
+            "valid-target-ids": { "type": "array", "items": { "type": "string" } },
+            "special-effect-active": { "type": "boolean" }
+          }
+        },
+        "card-in-hand": {
+          "description": "Same as card, but with additional fields required",
+          "oneOf": [
+            { "$ref": "#/components/schemas/minion-card-in-hand" },
+            { "$ref": "#/components/schemas/spell-card-in-hand" },
+            { "$ref": "#/components/schemas/weapon-card-in-hand" },
+            { "$ref": "#/components/schemas/hero-card-in-hand" }
+          ]
+        },
+        "minion-card-in-hand": {
+          "allOf": [
+            { "$ref": "#/components/schemas/minion-card" },
+            {
+              "type": "object",
+              "required": ["id", "owner-id", "playable", "valid-target-ids"]
+            }
+          ]
+        },
+        "spell-card-in-hand": {
+          "allOf": [
+            { "$ref": "#/components/schemas/spell-card" },
+            {
+              "type": "object",
+              "required": ["id", "owner-id", "playable", "valid-target-ids"]
+            }
+          ]
+        },
+        "weapon-card-in-hand": {
+          "allOf": [
+            { "$ref": "#/components/schemas/weapon-card" },
+            {
+              "type": "object",
+              "required": ["id", "owner-id", "playable", "valid-target-ids"]
+            }
+          ]
+        },
+        "hero-card-in-hand": {
+          "allOf": [
+            { "$ref": "#/components/schemas/hero-card" },
+            {
+              "type": "object",
+              "required": ["id", "owner-id", "playable", "valid-target-ids"]
+            }
+          ]
+        }
+      }
+    }
+  }

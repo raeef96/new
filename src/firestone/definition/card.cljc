@@ -2,7 +2,8 @@
   (:require [firestone.definitions :refer [add-definitions!
                                            get-definition
                                            get-definitions]]
-            [firestone.core :refer [draw-card]]
+            [firestone.core :refer [draw-card
+                                    get-attack]]
             [firestone.construct :refer [create-minion
                                          get-minions
                                          add-minion-to-board
@@ -16,7 +17,8 @@
                                          create-card
                                          add-card-to-secrets
                                          get-all-characters
-                                         update-hero]]))
+                                         update-hero
+                                         get-health]]))
 
 ;; Card definitions - properties that describe each card
 (def card-definitions
@@ -475,6 +477,7 @@
                          (add-minion-to-board player-id (create-minion "Steward") best-position)
                          ;; After adding the minion, make sure to recalculate all aura effects
                          (effects-parser (get-minions state player-id) player-id :process-auras))))}
+
    "Blood Imp effect"
    {:name        "Blood Imp effect"
     :description "At the end of your turn give another random friendly minion +1 Health."
@@ -482,7 +485,9 @@
                    (let [friendly-minions (filter #(not= (:id %) id) (get-minions state player-id))]
                      (if (seq friendly-minions)
                        (let [random-minion (rand-nth friendly-minions)]
-                         (update-minion state (:id random-minion) :health inc))
+                         ;; FIXED: Use overrides instead of trying to modify :health
+                         (update-minion state (:id random-minion) :overrides
+                                        #(assoc % :health-bonus (+ (get % :health-bonus 0) 1))))
                        state)))}
 
    ;; Battlecry effects
@@ -520,7 +525,9 @@
                          (do
                            (println "Found target by position:" (:name target-minion))
                            (-> state
-                               (update-minion (:id target-minion) :attack #(+ (or % 1) 2))
+                               ;; FIXED: Use overrides instead of trying to modify :attack
+                               (update-minion (:id target-minion) :overrides
+                                              #(assoc % :attack-bonus (+ (get % :attack-bonus 0) 2)))
                                (update-minion (:id target-minion) :effects
                                               (fn [effects] (conj (or effects []) "Abusive Sergeant reduction")))))
                          (do
@@ -534,7 +541,9 @@
                          (do
                            (println "Found target by ID:" (:name target-minion))
                            (-> state
-                               (update-minion target-id :attack #(+ (or % 1) 2))
+                               ;; FIXED: Use overrides instead of trying to modify :attack
+                               (update-minion target-id :overrides
+                                              #(assoc % :attack-bonus (+ (get % :attack-bonus 0) 2)))
                                (update-minion target-id :effects
                                               (fn [effects] (conj (or effects []) "Abusive Sergeant reduction")))))
                          (do
@@ -545,14 +554,22 @@
    {:name      "Abusive Sergeant reduction"
     :this-turn (fn [state id player-id enemy-id target-id]
                  (-> state
-                     (update-minion id :attack #(- % 2))
+                     ;; FIXED: Remove exactly 2 attack bonus (the amount that was added)
+                     (update-minion id :overrides
+                                    #(let [current-bonus (get % :attack-bonus 0)
+                                           new-bonus (- current-bonus 2)]
+                                       (if (<= new-bonus 0)
+                                         (dissoc % :attack-bonus)  ; Remove if zero or negative
+                                         (assoc % :attack-bonus new-bonus))))
                      (update-minion id :effects #(filter (fn [e] (not= e "Abusive Sergeant reduction")) %))))}
 
    "Stampeding Kodo effect"
    {:name        "Stampeding Kodo effect"
     :description "Battlecry: Destroy a random enemy minion with 2 or less Attack."
     :battlecry   (fn [state id player-id enemy-id target-id]
-                   (let [eligible-minions (filter #(<= (:attack %) 2) (get-minions state enemy-id))]
+                   (let [enemy-minions (get-minions state enemy-id)
+                         ;; BEST: Use get-attack function (includes base + aura + overrides)
+                         eligible-minions (filter #(<= (get-attack state (:id %)) 2) enemy-minions)]
                      (if (seq eligible-minions)
                        (let [target (rand-nth eligible-minions)]
                          (remove-minion state (:id target)))
@@ -579,7 +596,9 @@
     :description "Battlecry: Gain +1 Health for each card in your hand."
     :battlecry   (fn [state id player-id enemy-id target-id]
                    (let [hand-size (count (get-hand state player-id))]
-                     (update-minion state id :health #(+ % hand-size))))}
+                     ;; FIXED: Use overrides for permanent health bonus
+                     (update-minion state id :overrides
+                                    #(assoc % :health-bonus (+ (get % :health-bonus 0) hand-size)))))}
 
    "Dr. Boom effect"
    {:name        "Dr. Boom effect"
@@ -601,13 +620,17 @@
                          (update-hero state enemy-id :damage-taken inc)
                          (update-minion state (:id target) :damage-taken inc))))}
 
+   ;; FIXED: Questing Adventurer effect
    "Questing Adventurer effect"
    {:name      "Questing Adventurer effect"
     :description "Whenever you play a card, gain +1/+1."
     :play-card (fn [state id player-id enemy-id target-id]
                  (-> state
-                     (update-minion id :attack inc)
-                     (update-minion id :health inc)))}
+                     ;; FIXED: Use overrides instead of trying to modify :attack and :health
+                     (update-minion id :overrides
+                                    #(-> %
+                                         (assoc :attack-bonus (+ (get % :attack-bonus 0) 1))
+                                         (assoc :health-bonus (+ (get % :health-bonus 0) 1))))))}
 
    "Dire Wolf Alpha effect"
    {:name        "Dire Wolf Alpha effect"
@@ -615,11 +638,12 @@
     :process-auras (fn [state id player-id enemy-id target-id]
                      ;; This function is called to recalculate aura effects
                      ;; after minion positions change
-                     (println "Processing Dire Wolf Alpha aura effect")
                      ;; Return the state unchanged - the actual attack bonus
                      ;; is calculated dynamically in get-attack
                      state)}
+
    ;; Spell effects
+   ;; Then use get-health for cleaner death checks:
    "Consecration spell effect"
    {:name         "Consecration spell effect"
     :description  "Deal 2 damage to all enemies."
@@ -629,7 +653,7 @@
                     (println "  Enemy ID:" enemy-id)
 
                     (let [enemy-minions (get-minions state enemy-id)]
-                      (println "  Enemy minions:" (map #(select-keys % [:id :name :health :damage-taken]) enemy-minions))
+                      (println "  Enemy minions:" (map #(select-keys % [:id :name :damage-taken]) enemy-minions))
 
                       ;; Update hero damage
                       (println "  Updating enemy hero damage")
@@ -643,24 +667,28 @@
                                                   state-after-hero
                                                   enemy-minions)
 
-                            ;; Check for and remove dead minions
+                            ;; BEST: Use get-health function for death checks
                             final-state (reduce
                                           (fn [state minion-id]
                                             (let [minion (get-minion state minion-id)]
-                                              (if (and minion (>= (:damage-taken minion) (:health minion)))
-                                                (do
-                                                  (println "Removing dead minion:" (:name minion))
-                                                  (remove-minion state minion-id))
+                                              (if minion
+                                                (let [current-health (get-health state minion-id)]
+                                                  (if (<= current-health 0)
+                                                    (do
+                                                      (println "Removing dead minion:" (:name minion))
+                                                      (remove-minion state minion-id))
+                                                    state))
                                                 state)))
                                           state-after-minions
                                           (map :id enemy-minions))]
 
                         ;; Final state check
                         (println "  After cleanup, enemy minions:"
-                                 (map #(select-keys % [:id :name :health :damage-taken])
+                                 (map #(select-keys % [:id :name :damage-taken])
                                       (get-minions final-state enemy-id)))
                         final-state)))}
 
+   ;; FIXED: Kill Command spell effect - also has death check issue
    "Kill Command spell effect"
    {:name         "Kill Command spell effect"
     :description  "Deal 3 damage. If you control a Beast deal 5 damage instead."
@@ -697,10 +725,16 @@
                           (= (:entity-type target) :minion)
                           (let [updated-state (update-minion state target-id :damage-taken #(+ % damage))
                                 updated-target (get-minion updated-state target-id)
-                                final-state (if (and updated-target (>= (:damage-taken updated-target) (:health updated-target)))
-                                              (do
-                                                (println "  Removing dead minion:" (:name updated-target))
-                                                (remove-minion updated-state target-id))
+                                ;; FIXED: Use definition to check death
+                                final-state (if updated-target
+                                              (let [definition (get-definition (:name updated-target))
+                                                    max-health (or (:health definition) 1)
+                                                    is-dead (>= (:damage-taken updated-target) max-health)]
+                                                (if is-dead
+                                                  (do
+                                                    (println "  Removing dead minion:" (:name updated-target))
+                                                    (remove-minion updated-state target-id))
+                                                  updated-state))
                                               updated-state)]
                             (println "  Kill Command successful on minion")
                             (println "  Updated target:" (select-keys (get-minion updated-state target-id)
@@ -724,8 +758,8 @@
     :spell-effect (fn [state id player-id enemy-id target-id]
                     (let [all-minions (get-minions state)]
                       (reduce (fn [s minion]
-                                (let [max-health (:health minion)
-                                      current-health (- max-health (:damage-taken minion))
+                                (let [definition (get-definition (:name minion))
+                                      max-health (or (:health definition) 1)
                                       new-damage (max 0 (- max-health 1))]
                                   (update-minion s (:id minion) :damage-taken new-damage)))
                               state
@@ -861,25 +895,30 @@
                           (update-minion state (:id target) :damage-taken #(+ % 8))))
                       state)))}
 
-  "Shadow Sensei effect"
-  {:name        "Shadow Sensei effect"
-   :description "Battlecry: Give a Stealthed minion +2/+2."
-   :battlecry   (fn [state id player-id enemy-id target-id]
-                  (if (nil? target-id)
-                    state
-                    (let [target (get-minion state target-id)]
-                      (if (and target
-                               (some #(= % :stealth) (:states target)))
-                        (-> state
-                            (update-minion target-id :attack #(+ % 2))
-                            (update-minion target-id :health #(+ % 2)))
-                        state))))}
+   "Shadow Sensei effect"
+   {:name        "Shadow Sensei effect"
+    :description "Battlecry: Give a Stealthed minion +2/+2."
+    :battlecry   (fn [state id player-id enemy-id target-id]
+                   (if (nil? target-id)
+                     state
+                     (let [target (get-minion state target-id)]
+                       (if (and target
+                                (some #(= % :stealth) (:states target)))
+                         (-> state
+                             ;; FIXED: Use overrides instead of trying to modify :attack and :health
+                             (update-minion target-id :overrides
+                                            #(-> %
+                                                 (assoc :attack-bonus (+ (get % :attack-bonus 0) 2))
+                                                 (assoc :health-bonus (+ (get % :health-bonus 0) 2)))))
+                         state))))}
 
-  "Frothing Berserker effect"
-  {:name          "Frothing Berserker effect"
-   :description   "Whenever a minion takes damage, gain +1 Attack."
-   :damage-minion (fn [state id player-id enemy-id target-id]
-                    (update-minion state id :attack inc))}
+   "Frothing Berserker effect"
+   {:name          "Frothing Berserker effect"
+    :description   "Whenever a minion takes damage, gain +1 Attack."
+    :damage-minion (fn [state id player-id enemy-id target-id]
+                     ;; FIXED: Use overrides instead of trying to modify :attack
+                     (update-minion state id :overrides
+                                    #(assoc % :attack-bonus (+ (get % :attack-bonus 0) 1))))}
 
   "Baron Geddon effect"
   {:name        "Baron Geddon effect"

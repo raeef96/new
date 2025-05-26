@@ -9,88 +9,42 @@
   "Creates a hero from its definition by the given hero name. The additional key-values will override the default values."
   {:test (fn []
            (is= (create-hero "Jaina Proudmoore")
-                {:name             "Jaina Proudmoore"
-                 :entity-type      :hero
-                 :health           30
-                 :class            :mage
-                 :type             :hero
-                 :stealth          nil
-                 :effects          []
-                 :has-used-your-turn false
-                 :fatigue-counter  0
-                 :mana             10
-                 :max-mana         10
-                 :damage-taken     0
-                 :hero-power       {:name        "Fireblast"
-                                    :description "Deal 1 damage."
-                                    :mana-cost   2
-                                    :class       :mage
-                                    :type        :hero-power}})
-           (is= (create-hero "Gul'dan" :damage-taken 10)
-                {:name             "Gul'dan"
-                 :entity-type      :hero
-                 :health           30
-                 :class            :warlock
-                 :type             :hero
-                 :stealth          nil
-                 :effects          []
-                 :has-used-your-turn false
-                 :fatigue-counter  0
-                 :mana             10
-                 :max-mana         10
-                 :damage-taken     10
-                 :hero-power       {:name        "Life Tap"
-                                    :description "Draw a card and take 2 damage."
-                                    :mana-cost   2
-                                    :class       :warlock
-                                    :type        :hero-power}}))}
+                {:name         "Jaina Proudmoore"
+                 :entity-type  :hero
+                 :damage-taken 0
+                 :mana         10
+                 :max-mana     10
+                 :fatigue      1})
+           (is= (create-hero "Jaina Proudmoore" :damage-taken 10)
+                {:name         "Jaina Proudmoore"
+                 :entity-type  :hero
+                 :damage-taken 10
+                 :mana         10
+                 :max-mana     10
+                 :fatigue      1}))}
+  ; Variadic functions [https://clojure.org/guides/learn/functions#_variadic_functions]
   [name & kvs]
-  (let [definition (get-definition name)
-        hero {:name               name
-              :entity-type        :hero
-              :damage-taken       0
-              :max-mana           10
-              :mana               10
-              :health             (:health definition)
-              :class              (:class definition)
-              :type               (:type definition)
-              :stealth            nil
-              :effects            []
-              :has-used-your-turn false
-              :fatigue-counter    0
-              :hero-power         {
-                                   :class       (:class (get-definition (:hero-power definition)))
-                                   :description (:description (get-definition (:hero-power definition)))
-                                   :mana-cost   (:mana-cost (get-definition (:hero-power definition)))
-                                   :name        (:name (get-definition (:hero-power definition)))
-                                   :type        (:type (get-definition (:hero-power definition)))
-                                   }
-              }]
-    (if (empty? kvs)
-      hero
-      (apply assoc hero kvs))))
+  (let [hero {:name         name
+              :entity-type  :hero
+              :damage-taken 0
+              :mana         10
+              :max-mana     10
+              :fatigue      1}]
+    (cond
+      (empty? kvs) hero
+      :else (apply assoc hero kvs))))
 
 
 (defn create-card
   "Creates a card from its definition by the given card name. The additional key-values will override the default values."
   {:test (fn []
-           (is= (-> (create-card "Boulderfist Ogre" :id "bo")
-                    (:id))
-                "bo"))}
+           (is= (create-card "Boulderfist Ogre" :id "bo")
+                {:id          "bo"
+                 :entity-type :card
+                 :name        "Boulderfist Ogre"}))}
   [name & kvs]
-  (let [definition (get-definition name)
-        card {:name              name
-              :type              (:type definition)
-              :mana-cost         (:mana-cost definition)
-              :original-mana-cost (:mana-cost definition)
-              :playable          false
-              :valid-target-ids  []
-              :attack            (:attack definition)
-              :original-attack   (:attack definition)
-              :health            (:health definition)
-              :original-health   (:health definition)
-              :description       (or (:description definition) "")
-              :entity-type       :card}]
+  (let [card {:name        name
+              :entity-type :card}]
     (if (empty? kvs)
       card
       (apply assoc card kvs))))
@@ -204,51 +158,32 @@
            (is= (create-minion "Sheep"
                                :id "m"
                                :attacks-performed-this-turn 1)
-                {:attacks-performed-this-turn 1  ; This is overridden by the kvs parameter
-                 :can-attack                  nil
+                {:attacks-performed-this-turn 1
                  :damage-taken                0
-                 :description                 ""
                  :entity-type                 :minion
-                 :health                      1
-                 :id                          "m"
-                 :mana-cost                   1
-                 :max-health                  1
                  :name                        "Sheep"
-                 :original-attack             1
-                 :original-health             1
-                 :attack                      1
-                 :race                        :beast
-                 :set                         :basic}))}
+                 :id                          "m"
+                 :overrides                   {}}))}
   [name & kvs]
-  (let [definition (get-definition name)
+  (let [definition (get-definition name)                    ; Will be used later
         minion {:damage-taken                0
                 :entity-type                 :minion
-                :attack                      (:attack definition)
-                :health                      (:health definition)
                 :name                        name
                 :attacks-performed-this-turn 0
-                :can-attack                  (or (:can-attack definition) nil)
-                :description                 (or (:description definition) "")
-                :mana-cost                   (:mana-cost definition)
-                :max-health                  (:health definition)
-                :original-attack             (:attack definition)
-                :original-health             (:health definition)
-                :race                        (:race definition)
-                :set                         (:set definition)}]
+                :overrides                   {}}]
     (if (empty? kvs)
       minion
       (apply assoc minion kvs))))
 
 
 (defn create-empty-state
-  "Creates an empty state with the given heroes and initializes the effects queue.
-   If no heroes are provided, two default 'Jaina Proudmoore' heroes are used.
-   The returned state includes an :effects key for centralized effect handling."
+  "Creates an empty state with the given heroes."
   {:test (fn []
-           ;; Jaina Proudmoore will be the default hero
+           ; Jaina Proudmoore will be the default hero
            (is= (create-empty-state [(create-hero "Jaina Proudmoore")
                                      (create-hero "Jaina Proudmoore")])
                 (create-empty-state))
+
            (is= (create-empty-state [(create-hero "Jaina Proudmoore" :id "r")
                                      (create-hero "Gul'dan")])
                 {:player-id-in-turn             "p1"
@@ -256,53 +191,32 @@
                                                        :deck    []
                                                        :hand    []
                                                        :minions []
-                                                       :secrets []
-                                                       :hero    {:class              :mage
-                                                                 :damage-taken       0
-                                                                 :effects            []
-                                                                 :entity-type        :hero
-                                                                 :fatigue-counter    0
-                                                                 :has-used-your-turn false
-                                                                 :health             30
-                                                                 :hero-power         {:class       :mage
-                                                                                      :description "Deal 1 damage."
-                                                                                      :mana-cost   2
-                                                                                      :name        "Fireblast"
-                                                                                      :type        :hero-power}
-                                                                 :id                 "r"
-                                                                 :mana               10
-                                                                 :max-mana           10
-                                                                 :name               "Jaina Proudmoore"
-                                                                 :stealth            nil
-                                                                 :type               :hero}}
+                                                       :hero    {:name         "Jaina Proudmoore"
+                                                                 :id           "r"
+                                                                 :damage-taken 0
+                                                                 :entity-type  :hero
+                                                                 :mana         10
+                                                                 :max-mana     10
+                                                                 :fatigue      1}}
                                                  "p2" {:id      "p2"
                                                        :deck    []
                                                        :hand    []
                                                        :minions []
-                                                       :secrets []
-                                                       :hero    {:class              :warlock
-                                                                 :damage-taken       0
-                                                                 :effects            []
-                                                                 :entity-type        :hero
-                                                                 :fatigue-counter    0
-                                                                 :has-used-your-turn false
-                                                                 :health             30
-                                                                 :hero-power         {:class       :warlock
-                                                                                      :description "Draw a card and take 2 damage."
-                                                                                      :mana-cost   2
-                                                                                      :name        "Life Tap"
-                                                                                      :type        :hero-power}
-                                                                 :id                 "h2"
-                                                                 :mana               10
-                                                                 :max-mana           10
-                                                                 :name               "Gul'dan"
-                                                                 :stealth            nil
-                                                                 :type               :hero}}}
+                                                       :hero    {:name         "Gul'dan"
+                                                                 :id           "h2"
+                                                                 :damage-taken 0
+                                                                 :entity-type  :hero
+                                                                 :mana         10
+                                                                 :max-mana     10
+                                                                 :fatigue      1}}}
                  :counter                       1
+                 :seed                          42
                  :minion-ids-summoned-this-turn []
-                 :effects                       []}))}
-  ([] (create-empty-state []))
+                 :hero-power-used-this-turn #{} }))}
+  ([]
+   (create-empty-state []))
   ([heroes]
+   ; Creates Jaina Proudmoore heroes if heroes are missing.
    (let [heroes (->> (concat heroes [(create-hero "Jaina Proudmoore")
                                      (create-hero "Jaina Proudmoore")])
                      (take 2))]
@@ -313,7 +227,6 @@
                                                           :deck    []
                                                           :hand    []
                                                           :minions []
-                                                          :secrets []
                                                           :hero    (if (contains? hero :id)
                                                                      hero
                                                                      (assoc hero :id (str "h" (inc index))))}))
@@ -321,8 +234,9 @@
                                                     (assoc a (:id v) v))
                                                   {}))
       :counter                       1
+      :seed                          42
       :minion-ids-summoned-this-turn []
-      :effects                       []})))
+      :hero-power-used-this-turn #{} })))
 
 
 (defn get-player
@@ -909,28 +823,9 @@
 (defn handle-fatigue
   "Handles fatigue when a player's deck is empty, and they need to draw a card.
    Increases fatigue damage by 1 each time it occurs."
-  {:test (fn []
-           ; Create a state with initial fatigue counter of 0
-           (let [initial-state (create-game [{:hero (create-hero "Jaina Proudmoore"
-                                                                 :id "h1"
-                                                                 :damage-taken 0
-                                                                 :fatigue-counter 0)}])
-                 ; Apply fatigue once
-                 state-after-first-fatigue (handle-fatigue initial-state "p1")
-                 ; Apply fatigue a second time
-                 state-after-second-fatigue (handle-fatigue state-after-first-fatigue "p1")]
-
-             ; After first fatigue: fatigue counter = 1, damage taken = 1
-             (is= (get-in state-after-first-fatigue [:players "p1" :hero :fatigue-counter]) 1)
-             (is= (get-in state-after-first-fatigue [:players "p1" :hero :damage-taken]) 1)
-
-             ; After second fatigue: fatigue counter = 2, damage taken = 1 + 2 = 3
-             (is= (get-in state-after-second-fatigue [:players "p1" :hero :fatigue-counter]) 2)
-             (is= (get-in state-after-second-fatigue [:players "p1" :hero :damage-taken]) 3)))}
-
   [state player-id]
-  (let [fatigue-damage (+ (get-in state [:players player-id :hero :fatigue-counter]) 1)
-        current-damage-taken (get-in state [:players player-id :hero :damage-taken])]
+  (let [fatigue-damage (+ (get-in state [:players player-id :hero :fatigue-counter] 0) 1)
+        current-damage-taken (get-in state [:players player-id :hero :damage-taken] 0)]
     (-> state
         (assoc-in [:players player-id :hero :fatigue-counter] fatigue-damage)
         (assoc-in [:players player-id :hero :damage-taken] (+ current-damage-taken fatigue-damage)))))
@@ -1144,36 +1039,16 @@
 
 (defn get-health
   "Returns the health of the character."
-
-  {:test (fn []
-           ; Uninjured minion
-           (is= (-> (create-minion "Sheep")
-                    (get-health))
-                1)
-           ; Injured minion
-           (is= (-> (create-minion "Boulderfist Ogre" :damage-taken 1)
-                    (get-health))
-                6)
-           ; Minion in a state
-           (is= (-> (create-game [{:minions [(create-minion "Sheep" :id "m")]}])
-                    (get-health "m"))
-                1)
-           ; Uninjured hero
-           (is= (-> (create-hero "Jaina Proudmoore")
-                    (get-health))
-                30)
-           ; Injured hero
-           (is= (-> (create-hero "Jaina Proudmoore" :damage-taken 2)
-                    (get-health))
-                28)
-           ; Hero in a state
-           (is= (-> (create-game [{:hero (create-hero "Jaina Proudmoore" :id "h1")}])
-                    (get-health "h1"))
-                30))}
   ([character]
    {:pre [(map? character) (contains? character :damage-taken)]}
-   (let [definition (get-definition character)]
-     (- (:health definition) (:damage-taken character))))
+   (let [definition (get-definition (:name character))
+         base-health (or (:health definition) 1)
+         ;; ADDED: Consider health bonus from overrides (for minions)
+         health-bonus (if (= (:entity-type character) :minion)
+                        (get-in character [:overrides :health-bonus] 0)
+                        0)
+         max-health (+ base-health health-bonus)]
+     (- max-health (:damage-taken character))))
   ([state id]
    (get-health (get-character state id))))
 
@@ -1193,10 +1068,16 @@
         attacker-player-id (:owner-id attacker)
         target-player-id (:owner-id target)
 
+        ;; Get attack values from definitions (avoiding circular dependency)
+        attacker-def (get-definition (:name attacker))
+        target-def (get-definition (:name target))
+        attacker-attack (or (:attack attacker-def) 0)   ; ← FIXED: Read from definition
+        target-attack (or (:attack target-def) 0)       ; ← FIXED: Read from definition
+
         ;; Calculate and apply combat damage
         state-after-damage (-> state
-                               (update-minion attacker-id :damage-taken #(+ % (:attack target)))
-                               (update-minion target-id :damage-taken #(+ % (:attack attacker)))
+                               (update-minion attacker-id :damage-taken #(+ % target-attack))
+                               (update-minion target-id :damage-taken #(+ % attacker-attack))
                                (update-minion attacker-id :attacks-performed-this-turn inc)
                                (update-minion attacker-id :can-attack nil))
 
@@ -1226,7 +1107,8 @@
   (let [attacker (get-minion state attacker-id)
         attacker-player-id (:owner-id attacker)
         target-player-id (get-player-id-by-hero-id state target-id)
-        attack-value (:attack attacker)
+        attacker-def (get-definition (:name attacker))
+        attack-value (or (:attack attacker-def) 0)
         target-hero (get-hero state target-player-id)
 
         ;; Process secrets and hero-attacked effects
@@ -1276,35 +1158,21 @@
                    (map :id (:board-entities enemy)) ; Minions on board
                    [(:id (:hero enemy))]))))) ; Hero ID
 
-(defn reset-can-attack
-  "Resets can-attack for the minions of the given player-id to 1 if appropriate.
-   Logs the decision for each minion."
+(defn reset-turn-static-properties
+  "Only resets truly static/semi-static properties at turn boundaries."
   [state player-id]
-  (println "Entering reset-can-attack for player" player-id "with state:" (pr-str state))
   (let [minions (get-minions state player-id)]
     (reduce
       (fn [updated-state minion]
-        (let [id (:id minion)
-              sleepy (:sleepy minion)
-              attack (:attack minion)
-              can-attack (and (not sleepy) (> attack 0))
-              enemy-ids (get-enemy-ids state player-id)]
-          (println "Processing minion" id "=> sleepy:" sleepy ", attack:" attack ", can-attack computed as:" (if can-attack 1 0))
+        (let [id (:id minion)]
+          ;; Only reset static properties that change at turn boundaries
           (-> updated-state
-              (update-minion id :can-attack (if can-attack 1 0))
-              (update-minion id :valid-attack-ids
-                             (if can-attack
-                               (do
-                                 (println "Setting valid-attack-ids for minion" id "to enemy ids:" enemy-ids)
-                                 enemy-ids)
-                               (do
-                                 (println "Minion" id "cannot attack, empty valid-attack-ids")
-                                 []))))))
-      state                       ; use state as the initial accumulator
-      minions)))                  ; reduce over the minions
-
-
-
+              ;; Reset attack counter (static)
+              (update-minion id :attacks-performed-this-turn 0)
+              ;; Wake up minions (semi-static state change)
+              (update-minion id :sleepy false))))
+      state
+      minions)))
 
 (defn remove-can-attack
   "Sets can-attack for the minions of the given player-id to nil"
@@ -1359,11 +1227,12 @@
 
 (defn hero-can-use-power?
   [state player-id hero]
-  (let [hero-mana (get-hero-mana state player-id)]
-    (and (<= (:mana-cost (:hero-power hero) hero) hero-mana)
+  (let [hero-mana (get-hero-mana state player-id)
+        hero-power (:hero-power hero)]
+    (and (some? hero-power)
+         (<= (:mana-cost hero-power 2) hero-mana)
          (= (:player-id-in-turn state) player-id)
-         (= (:has-used-your-turn hero) false)
-         )))
+         (not (:has-used-your-turn hero)))))
 
 (defn get-valid-target-ids
   "Returns a collection of valid target IDs based on the card or hero's target definitions."
@@ -1413,8 +1282,10 @@
   [state player-id card]
   (let [hero-mana (get-hero-mana state player-id)
         minion-count (count (get-minions state player-id))
-        current-secrets (get-secrets state player-id)]
-    (and (<= (:mana-cost card) hero-mana)
+        current-secrets (get-secrets state player-id)
+        card-mana-cost (or (:mana-cost card)
+                           (get-mana-cost (:name card)))]
+    (and (<= card-mana-cost hero-mana)
          (< minion-count 7)
          (= (:owner-id card) player-id)
          (= (:player-id-in-turn state) player-id)

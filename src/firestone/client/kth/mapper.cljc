@@ -4,7 +4,8 @@
             [ysera.test :refer [is]]
             [firestone.client.kth.spec]
             [firestone.definitions :as def]
-            [firestone.core :refer [get-attack]]))
+            [firestone.core :refer [get-attack
+                                    sleepy?]]))
 
 
 (defn check-spec
@@ -20,28 +21,55 @@
                                                 (construct/get-hero game "p1")
                                                 "p1")))))}
   [game hero player-id]
-  {:armor            0
-   :owner-id         player-id
-   :entity-type      :hero
-   :attack           0
-   :can-attack       false
-   :health           (- (:health hero) (:damage-taken hero))
-   :id               (:id hero)
-   :mana             (construct/get-mana game player-id)
-   :max-health       30
-   :max-mana         (construct/get-max-mana game player-id)
-   :name             (:name hero)
-   :states           []
-   :valid-attack-ids []
-   :hero-power       {:name               (:name (:hero-power hero))
-                      :description        (:description (:hero-power hero))
-                      :entity-type        :hero-power
-                      :mana-cost          (:mana-cost (:hero-power hero))
-                      :original-mana-cost (construct/get-mana-cost (:name (:hero-power hero)))
-                      :can-use            (construct/hero-can-use-power? game player-id hero)
-                      :owner-id           (:id (construct/get-hero game player-id))
-                      :has-used-your-turn (:has-used-your-turn hero)
-                      :valid-target-ids   (construct/get-valid-target-ids game player-id hero)}})
+  (let [hero-def (def/get-definition (:name hero))
+        hero-power-name (:hero-power hero-def)
+        hero-power-def (when hero-power-name (def/get-definition hero-power-name))
+        hero-power-cost (when hero-power-def (:mana-cost hero-power-def))]
+    {:armor            0
+     :owner-id         player-id
+     :entity-type      :hero
+     :attack           0
+     :can-attack       false
+     :health           (- (or (:health hero) 30) (:damage-taken hero))
+     :id               (:id hero)
+     :mana             (construct/get-mana game player-id)
+     :max-health       30
+     :max-mana         (construct/get-max-mana game player-id)
+     :name             (:name hero)
+     :states           []
+     :valid-attack-ids []
+     :hero-power       {:name               (or hero-power-name "Unknown")
+                        :description        (or (:description hero-power-def) "")
+                        :entity-type        :hero-power
+                        :mana-cost          (or hero-power-cost 2)
+                        :original-mana-cost (if hero-power-name
+                                              (construct/get-mana-cost hero-power-name)
+                                              2)
+                        :can-use            (if hero-power-name
+                                              (construct/hero-can-use-power? game player-id hero)
+                                              false)
+                        :owner-id           (:id hero)
+                        :has-used-your-turn (or (:has-used-your-turn hero) false)
+                        :valid-target-ids   (if hero-power-name
+                                              (construct/get-valid-target-ids game player-id hero)
+                                              [])}}))
+
+(defn compute-can-attack
+  "Computes whether a minion can attack based on current game state"
+  [game minion]
+  (let [minion-id (:id minion)
+        owner-id (:owner-id minion)
+        current-attack (get-attack game minion-id)
+        valid-targets (construct/get-attackable-ids game owner-id)
+        is-owner-turn (= (construct/get-player-id-in-turn game) owner-id)]
+    (and
+      ;; Basic attack requirements
+      (> current-attack 0)                           ; Has attack power
+      (not (sleepy? game minion-id))                 ; Not sleepy
+      (seq valid-targets)                            ; Has valid targets
+      is-owner-turn                                  ; Owner's turn
+      ;; Haven't attacked too much this turn (assuming 1 attack per turn for most minions)
+      (< (:attacks-performed-this-turn minion) 1))))
 
 (defn minion->client-minion
   {:test (fn []
@@ -51,37 +79,43 @@
 
              (is (check-spec :firestone.client.kth.spec/minion
                              (minion->client-minion new-game
-                                                    (construct/get-minion new-game "p")
-                                                    )))))}
+                                                    (construct/get-minion new-game "p"))))))}
   [game minion]
-  {:damage-taken                (:damage-taken minion)
-   :entity-type                 :minion
-   :name                        (:name minion)
-   :added-to-board-time-id      (:added-to-board-time-id minion)
-   :attacks-performed-this-turn (:attacks-performed-this-turn minion)
-   :id                          (:id minion)
-   :sleepy                      (or (:sleepy minion) false)
-   :owner-id                    (:owner-id minion)
-   :position                    (:position minion)
-   :mana-cost                   (construct/get-mana-cost (:name minion))
-   :original-attack             (construct/get-original-attack (:name minion))
-   :original-health             (construct/get-original-health (:name minion))
-   :description                 (:description minion)
-   :states                      (if (seq (:states minion))
-                                  (vec (remove nil? (:states minion)))
-                                  [])
-   :effects                     (if (seq (:effects minion))
-                                  (vec (remove nil? (:effects minion)))
-                                  [])
-   :can-attack                  (or (:can-attack minion) false)
-   :health                      (- (:health minion) (:damage-taken minion))
-   :attack                      (get-attack game (:id minion))
-   :valid-attack-ids            (construct/get-attackable-ids game (:owner-id minion))
-   :max-health                  (:original-health minion)
-   :race                        (:race minion)
-   :set                         (:set minion)
-   })
+  (let [minion-def (def/get-definition (:name minion))]
+    {;; Static properties - read from stored values
+     :damage-taken                (:damage-taken minion)
+     :entity-type                 :minion
+     :name                        (:name minion)
+     :added-to-board-time-id      (:added-to-board-time-id minion)
+     :attacks-performed-this-turn (:attacks-performed-this-turn minion)
+     :id                          (:id minion)
+     :owner-id                    (:owner-id minion)
+     :position                    (:position minion)
+     :overrides                   (:overrides minion)
 
+     ;; Semi-static properties - read from stored values (set occasionally)
+     :states                      (if (seq (:states minion))
+                                    (vec (remove nil? (:states minion)))
+                                    [])
+     :effects                     (if (seq (:effects minion))
+                                    (vec (remove nil? (:effects minion)))
+                                    [])
+
+     ;; Static properties from definition - never change
+     :mana-cost                   (:mana-cost minion-def)
+     :original-attack             (:attack minion-def)
+     :original-health             (:health minion-def)
+     :description                 (:description minion-def)
+     :max-health                  (:health minion-def)
+     :race                        (:race minion-def)
+     :set                         (:set minion-def)
+
+     ;; Dynamic properties - computed from current game state
+     :can-attack                  (compute-can-attack game minion)
+     :health                      (- (:health minion-def) (:damage-taken minion))
+     :attack                      (get-attack game (:id minion))
+     :valid-attack-ids            (construct/get-attackable-ids game (:owner-id minion))
+     :sleepy                      (sleepy? game (:id minion))}))
 
 (defn hand->client-hand
   [game card]

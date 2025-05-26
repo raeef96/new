@@ -15,8 +15,7 @@
                                          create-hero
                                          create-minion
                                          clear-sleepy-status-from-minions
-                                         reset-can-attack
-                                         remove-can-attack
+                                         reset-turn-static-properties                                         remove-can-attack
                                          reset-attacks-performed-this-turn
                                          get-hero-player-id
                                          get-all-characters]]))
@@ -74,8 +73,8 @@
         ;; Apply basic state updates
         updated-state (-> state-after-this-turn
                           (clear-sleepy-status-from-minions)
-                          (reset-can-attack next-player-id)
-                          (remove-can-attack player-id)
+                          (reset-turn-static-properties next-player-id)
+                          ;; ✅ REMOVED: (remove-can-attack player-id) - not needed with Option 2
                           (reset-attacks-performed-this-turn next-player-id)
                           (update-hero (:id (get-hero-player-id state next-player-id)) :has-used-your-turn false)
                           (assoc :minion-ids-summoned-this-turn [])

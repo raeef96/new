@@ -207,11 +207,16 @@
    Only adds defaults when game-params is nil (no request data), not when it's an empty array."
   [state game-params]
   (if (nil? game-params)
-    ;; Only when truly no parameters provided (nil), add default cards for a playable demo
-    (-> state
-        (construct/add-cards-to-deck "p1" (repeat 10 "Sheep"))
-        (construct/add-cards-to-deck "p2" (repeat 10 "Sheep"))
-        (construct/add-cards-to-hand "p1" ["Sheep" "Boulderfist Ogre" "Leper Gnome" "Loot Hoarder"])
-        (construct/add-cards-to-hand "p2" ["Sheep" "Boulderfist Ogre" "Loot Hoarder"]))
+    (let [all-definitions (def/get-definitions)
+          card-names (->> all-definitions
+                          (filter #(contains? #{:minion :spell} (:type %)))
+                          (map :name)
+                          (remove #{"Squire" "Boom Bot" "Steward" "Cat in a Hat"})
+                          (vec))]
+      (-> state
+          (construct/add-cards-to-deck "p1" card-names)
+          (construct/add-cards-to-deck "p2" card-names)
+          (construct/add-cards-to-hand "p1" (take 4 card-names))
+          (construct/add-cards-to-hand "p2" (take 4 card-names))))
     ;; If game-params is provided (even if empty []), respect that and don't add defaults
     state))

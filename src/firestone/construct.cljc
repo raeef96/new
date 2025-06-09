@@ -164,7 +164,7 @@
   ([heroes]
    ; Creates Jaina Proudmoore heroes if heroes are missing.
    (let [heroes (->> (concat heroes [(create-hero "Jaina Proudmoore")
-                                     (create-hero "Jaina Proudmoore")])
+                                     (create-hero "Gul'dan")])
                      (take 2))]
      {:player-id-in-turn             "p1"
       :players                       (->> heroes

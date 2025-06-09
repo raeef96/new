@@ -18,6 +18,7 @@
                                          create-card
                                          get-character
                                          get-all-characters
+                                         deduct-player-mana
                                          get-max-mana
                                          handle-minion-attack-on-minion
                                          handle-minion-attack-on-hero
@@ -30,7 +31,7 @@
 
 
 (defn get-entity-type
-  "Returns the damage taken by an entity (hero or minion) given its ID."
+  "Returns the entity type (:hero or :minion) of an entity given its ID."
   {:test (fn []
            (is= (-> (create-game [{:hero (create-hero "Jaina Proudmoore" :id "h1")}])
                     (get-entity-type "h1"))
@@ -90,7 +91,6 @@
                              0
                              player-minions)]
 
-    ;; FIXED: Return the base attack plus aura bonuses plus temporary buffs
     (+ base-attack aura-bonus attack-bonus)))
 
 
@@ -197,127 +197,162 @@
          (string? player-id)              ; Ensure player-id is a string
          (string? attacker-id)            ; Ensure attacker-id is a string
          (string? target-id)]}            ; Ensure target-id is a string
-  ;(println "Game state: " state)
   (if (valid-attack? state player-id attacker-id target-id)
     (let [type (get-entity-type state target-id)]
       (cond
-        (= type :minion) (handle-minion-attack-on-minion state attacker-id target-id)
-        (= type :hero)   (handle-minion-attack-on-hero state attacker-id target-id)
+        (= type :minion) (handle-minion-attack-on-minion {:state state
+                                                          :attacker-id attacker-id
+                                                          :target-id target-id})
+        (= type :hero)   (handle-minion-attack-on-hero {:state state
+                                                        :attacker-id attacker-id
+                                                        :target-id target-id})
         :else            (error "card doesn't exist")))
     (error "Invalid attack")))
+
+;; Add these helper functions before the play-card function in firestone.core
+
+(defn validate-player-turn
+  "Validates that it's the player's turn. Throws error if not."
+  [state player-id]
+  (when (not= (get-player-id-in-turn state) player-id)
+    (error "It's not the player's turn.")))
+
+(defn find-card-in-hand
+  "Finds a card by ID in the player's hand. Throws error if not found."
+  [state player-id card-id]
+  (let [hand (get-hand state player-id)
+        card (some #(when (= (:id %) card-id) %) hand)]
+    (when (nil? card)
+      (error "The player does not have the specified card in their hand."))
+    card))
+
+(defn normalize-position
+  "Normalizes position value to a number, defaulting to 0 if invalid."
+  [position]
+  (cond
+    (number? position) position
+    (string? position) (try (Integer/parseInt position)
+                            (catch Exception e 0))
+    :else 0))
+
+(defn play-minion-card
+  "Handles playing a minion card."
+  [state player-id card position]
+  (when-not (can-play-minion? state player-id card)
+    (error "Cannot play the minion card."))
+
+  (let [card-def (get-definition (:name card))
+        mana-cost (or (:mana-cost card-def) 0)
+
+        ;; Use shadowing instead of creating new variable names
+        state (update-hero state player-id :mana #(- % mana-cost))
+        state (remove-card-from-hand state player-id card)
+
+        new-minion (create-minion (:name card)
+                                  :sleepy true
+                                  :effects (when (:effect card-def) [(:effect card-def)]))
+        state (add-minion-to-board state player-id new-minion position)
+
+        placed-minion (last (get-minions state player-id))
+
+        state (update state :minion-ids-summoned-this-turn
+                      #(conj (or % []) (:id placed-minion)))]
+
+    ;; Return state and placed-minion for battlecry processing
+    {:state state :minion placed-minion}))
+
+(defn play-spell-card
+  "Handles playing a spell card."
+  [state player-id card target-id]
+  (let [card-def (get-definition (:name card))
+        mana-cost (or (:mana-cost card-def) 0)
+        spell-effect-name (:spell-effect card-def)
+        current-mana (get-in state [:players player-id :hero :mana] 0)]
+
+    (when-not (and spell-effect-name (>= current-mana mana-cost))
+      (error "Cannot play the spell card."))
+
+    (let [;; Use shadowing
+          state (update-hero state player-id :mana #(- % mana-cost))
+          state (remove-card-from-hand state player-id card)
+          ;; Match original exactly - include effects array with spell-effect-name
+          spell-entity {:id (:id card)
+                        :name (:name card)
+                        :effects [spell-effect-name]}]
+
+      (effects-parser state
+                      [spell-entity]
+                      player-id
+                      :spell-effect
+                      {:target-id target-id}))))
 
 (defn play-card
   "Handles playing a card by its type (minion or spell)."
   [state player-id card-id target-id position]
-  (if (not= (get-player-id-in-turn state) player-id)
-    (error "It's not the player's turn.")
-    (let [hand (get-hand state player-id)
-          card (some #(when (= (:id %) card-id) %) hand)
+  ;; Use when for side-effect validation
+  (validate-player-turn state player-id)
 
-          ;; Get the card definition to determine its type
-          card-def (when card (get-definition (:name card)))
-          card-type (:type card-def)  ;; Get the type from the definition
+  (let [card (find-card-in-hand state player-id card-id)
+        card-def (get-definition (:name card))
+        card-type (:type card-def)
 
-          ;; Handle case where position might actually be a target ID
-          effective-target-id (if (and (string? position)
-                                       (clojure.string/starts-with? position "m"))
-                                position
-                                target-id)
+        ;; Check if position is actually a target ID (starts with "m")
+        position-is-target? (and (string? position)
+                                 (clojure.string/starts-with? position "m"))
 
-          ;; Normalize position value
-          position-num (if (and (string? position)
-                                (clojure.string/starts-with? position "m"))
-                         0  ;; Default position if position is actually a minion ID
-                         (if (number? position)
-                           position
-                           (try (Integer/parseInt (str position))
-                                (catch Exception e 0))))
+        ;; Handle case where position might actually be a target ID
+        effective-target-id (if position-is-target? position target-id)
 
-          ;; Resolve target ID if it's a position
-          actual-target-id (cond
-                             (nil? effective-target-id) nil
+        ;; Normalize position value for minion placement
+        position-num (if position-is-target? 0 (normalize-position position))
 
-                             (and (string? effective-target-id)
-                                  (or (clojure.string/starts-with? effective-target-id "m")
-                                      (clojure.string/starts-with? effective-target-id "h")))
-                             effective-target-id
+        ;; Resolve target ID using the exact same logic as original
+        actual-target-id (cond
+                           (nil? effective-target-id) nil
 
-                             (or (number? effective-target-id)
-                                 (re-matches #"\d+" (str effective-target-id)))
-                             (let [pos (if (number? effective-target-id)
-                                         effective-target-id
-                                         (Integer/parseInt (str effective-target-id)))
-                                   enemy-id (if (= player-id "p1") "p2" "p1")
-                                   all-minions (concat (get-minions state player-id)
-                                                       (get-minions state enemy-id))
-                                   minion (first (filter #(= (:position %) pos) all-minions))]
-                               (:id minion))
+                           (and (string? effective-target-id)
+                                (or (clojure.string/starts-with? effective-target-id "m")
+                                    (clojure.string/starts-with? effective-target-id "h")))
+                           effective-target-id
 
-                             :else effective-target-id)]
+                           (or (number? effective-target-id)
+                               (re-matches #"\d+" (str effective-target-id)))
+                           (let [pos (if (number? effective-target-id)
+                                       effective-target-id
+                                       (Integer/parseInt (str effective-target-id)))
+                                 enemy-id (if (= player-id "p1") "p2" "p1")
+                                 all-minions (concat (get-minions state player-id)
+                                                     (get-minions state enemy-id))
+                                 minion (first (filter #(= (:position %) pos) all-minions))]
+                             (:id minion))
 
-      (if (nil? card)
-        (error "The player does not have the specified card in their hand.")
-        (condp = card-type
-          :minion
-          (if (can-play-minion? state player-id card)
-            (let [mana-cost (or (:mana-cost card-def) 0)  ;; Get mana cost from definition with fallback
-                  current-mana (get-in state [:players player-id :hero :mana] 0)  ;; Get current mana safely
+                           :else effective-target-id)]
 
-                  ;; Make sure we have valid numbers before subtracting
-                  state-after-mana (update-hero state player-id :mana
-                                                (fn [m] (- (or m current-mana) mana-cost)))
-
-                  state-after-card-removed (remove-card-from-hand state-after-mana player-id card)
-                  new-minion (create-minion (:name card)
-                                            :sleepy true
-                                            :effects (when (:effect card-def) [(:effect card-def)]))
-                  state-with-minion (add-minion-to-board state-after-card-removed
-                                                         player-id
-                                                         new-minion
-                                                         position-num)
-                  placed-minion (last (get-minions state-with-minion player-id))
-                  state-with-tracked-minion (update state-with-minion
-                                                    :minion-ids-summoned-this-turn
-                                                    #(conj (or % []) (:id placed-minion)))]
-
-              (-> state-with-tracked-minion
-                  (effects-parser [placed-minion]
+    (condp = card-type
+      :minion
+      (let [{:keys [state minion]} (play-minion-card state player-id card position-num)
+            ;; Process battlecry
+            state (effects-parser state
+                                  [minion]
                                   player-id
                                   :battlecry
                                   {:target-id actual-target-id})
-                  (update :minion-ids-summoned-this-turn conj (:id placed-minion))
-                  (effects-parser (get-all-characters state-with-minion)
+            ;; Process play-card effects
+            state (effects-parser state
+                                  (get-all-characters state)
                                   player-id
                                   :play-card
-                                  {:card-id card-id})))
-            (error "Cannot play the minion card."))
+                                  {:card-id card-id})]
+        state)
 
-          :spell
-          (let [mana-cost (or (:mana-cost card-def) 0)  ;; Get mana cost from definition with fallback
-                current-mana (get-in state [:players player-id :hero :mana] 0)  ;; Get current mana safely
-                spell-effect-name (:spell-effect card-def)]
+      :spell
+      (play-spell-card state player-id card actual-target-id)
 
-            (if (and spell-effect-name (>= current-mana mana-cost))
-              (let [state-after-mana (update-hero state player-id :mana
-                                                  (fn [m] (- (or m current-mana) mana-cost)))
-                    state-after-card-removed (remove-card-from-hand state-after-mana player-id card)
-                    enemy-id (if (= player-id "p1") "p2" "p1")
-                    spell-entity {:id card-id
-                                  :name (:name card)
-                                  :effects [spell-effect-name]}]
-
-                (effects-parser state-after-card-removed
-                                [spell-entity]
-                                player-id
-                                :spell-effect
-                                {:target-id actual-target-id}))
-              (error "Cannot play the spell card.")))
-
-          (error "Unknown card type."))))))
+      ;; Default case
+      (error "Unknown card type."))))
 
 (defn get-valid-attacks
-  "Updates valid attack targets for each minion of the player in turn.
-   Logs the computed valid targets."
+  "Updates valid attack targets for each minion of the player in turn."
   {:test (fn []
            ; Test with player minions that can attack
            (let [state (create-game [{:minions [(create-minion "Sheep" :id "m1" :sleepy false
@@ -329,7 +364,6 @@
                                 (:valid-attack-ids)
                                 (set))
                             "m2")))
-
            ; Test that enemy hero is a valid target
            (let [state (create-game [{:minions [(create-minion "Sheep" :id "m1" :sleepy false
                                                                :attacks-performed-this-turn 0)]}])]
@@ -347,13 +381,59 @@
         opponent-minions (get-minions state opponent-id)
         opponent-minion-ids (map :id (filter (fn [m] (not (:stealth m))) opponent-minions))
         hero-id (get-in state [:players opponent-id :hero :id])]
-    (println "Entering get-valid-attacks for player in turn:" player-id-in-turn)
-    (println "Opponent id:" opponent-id ", opponent minion ids:" opponent-minion-ids ", hero id:" hero-id)
     (reduce
       (fn [new-state minion]
         (let [minion-id (:id minion)
               valid-ids (conj opponent-minion-ids hero-id)]
-          (println "Setting valid-attack-ids for minion" minion-id "to:" valid-ids)
           (update-minion new-state minion-id :valid-attack-ids valid-ids)))
       state
       (get-minions state player-id-in-turn))))
+
+(defn use-hero-power
+  "Allows a player to use their hero power, validating they can use it and applying its effects."
+  [state player-id target-id]
+  {:pre [(map? state)
+         (string? player-id)]}
+
+  (when (not= (get-player-id-in-turn state) player-id)
+    (error "It's not the player's turn."))
+
+  (let [hero (get-in state [:players player-id :hero])
+        hero-def (get-definition (:name hero))
+        hero-power-name (:hero-power hero-def)
+        hero-power-def (when hero-power-name (get-definition hero-power-name))]
+
+    (when (nil? hero-power-def)
+      (error "Hero power not found."))
+
+    (let [mana-cost (:mana-cost hero-power-def 2)
+          current-mana (:mana hero 0)
+          hero-power-used? (:has-used-your-turn hero false)]
+
+      (when hero-power-used?
+        (error "Hero power already used this turn."))
+
+      (when (< current-mana mana-cost)
+        (error "Not enough mana to use hero power."))
+
+      (let [state (update-hero state player-id :mana #(- % mana-cost))
+            state (update-hero state player-id :has-used-your-turn true)
+            hero-power-fn (:power hero-power-def)]
+
+        (when (nil? hero-power-fn)
+          (error "Hero power has no effect defined."))
+
+        (case hero-power-name
+          "Life Tap"
+          (hero-power-fn state player-id)
+
+          "Fireblast"
+          (do
+            (when (nil? target-id)
+              (error "Fireblast requires a target."))
+            (hero-power-fn state target-id))
+
+          ;; default case - using when with or for conditional logic
+          (or (when target-id
+                (hero-power-fn state player-id target-id))
+              (hero-power-fn state player-id)))))))

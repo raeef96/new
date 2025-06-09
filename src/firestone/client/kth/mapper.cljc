@@ -13,6 +13,24 @@
   (or (s/valid? spec value)
       (s/explain spec value)))
 
+(defn filter-serializable-effects
+  "Removes effects that contain functions (not JSON serializable)"
+  [effects]
+  (when effects
+    (->> effects
+         (filter (fn [effect]
+                   (cond
+                     ;; Keep string effects (they're serializable)
+                     (string? effect) true
+
+                     ;; Filter out map effects that contain functions
+                     (map? effect)
+                     (not (some fn? (vals effect)))
+
+                     ;; Keep other types
+                     :else true)))
+         (vec))))
+
 (defn hero->client-hero
   {:test (fn []
            (let [game (construct/create-game)]
@@ -38,6 +56,8 @@
      :name             (:name hero)
      :states           []
      :valid-attack-ids []
+     ;; ADDED: Filter effects for heroes too (if they have any)
+     :effects          (filter-serializable-effects (:effects hero))
      :hero-power       {:name               (or hero-power-name "Unknown")
                         :description        (or (:description hero-power-def) "")
                         :entity-type        :hero-power
@@ -97,9 +117,9 @@
      :states                      (if (seq (:states minion))
                                     (vec (remove nil? (:states minion)))
                                     [])
-     :effects                     (if (seq (:effects minion))
-                                    (vec (remove nil? (:effects minion)))
-                                    [])
+
+     ;; UPDATED: Filter out functions from effects before sending to client
+     :effects                     (filter-serializable-effects (:effects minion))
 
      ;; Static properties from definition - never change
      :mana-cost                   (:mana-cost minion-def)
@@ -119,23 +139,24 @@
 
 (defn hand->client-hand
   [game card]
-  {:name                (:name card)
-   :entity-type         :card
-   :mana-cost           (:mana-cost card)
-   :original-mana-cost  (:original-mana-cost card)
-   :id                  (:id card)
-   :owner-id            (:owner-id card)
-   :attack              (:attack card)
-   :original-attack     (:original-attack card)
-   :health              (:health card)
-   :original-health     (:original-health card)
-   :playable            (construct/is-card-playable? game (:owner-id card) card)
-   :valid-target-ids    (construct/get-valid-target-ids game (:owner-id card) card)
-   :durability          (:durability card)
-   :original-durability (:original-durability card)
-   :description         (or (:description card) "")
-   :race                (:race card)
-   :type                (:type card)})
+  (let [card-def (def/get-definition (:name card))]
+    {:name                (:name card)
+     :entity-type         :card
+     :mana-cost           (or (:mana-cost card) (:mana-cost card-def))
+     :original-mana-cost  (or (:original-mana-cost card) (:mana-cost card-def))
+     :id                  (:id card)
+     :owner-id            (:owner-id card)
+     :attack              (or (:attack card) (:attack card-def))
+     :original-attack     (or (:original-attack card) (:attack card-def))
+     :health              (or (:health card) (:health card-def))
+     :original-health     (or (:original-health card) (:health card-def))
+     :playable            (construct/is-card-playable? game (:owner-id card) card)
+     :valid-target-ids    (construct/get-valid-target-ids game (:owner-id card) card)
+     :durability          (or (:durability card) (:durability card-def))
+     :original-durability (or (:original-durability card) (:durability card-def))
+     :description         (or (:description card) (:description card-def) "")
+     :race                (or (:race card) (:race card-def))
+     :type                (or (:type card) (:type card-def))}))
 
 
 (defn secrets->client-secrets
@@ -180,3 +201,17 @@
                          (map (fn [player-id]
                                 (player->client-player game
                                                        (construct/get-player game player-id)))))}))
+
+(defn populate-default-cards
+  "Adds default cards to the game when no game data is provided at the API level.
+   Only adds defaults when game-params is nil (no request data), not when it's an empty array."
+  [state game-params]
+  (if (nil? game-params)
+    ;; Only when truly no parameters provided (nil), add default cards for a playable demo
+    (-> state
+        (construct/add-cards-to-deck "p1" (repeat 10 "Sheep"))
+        (construct/add-cards-to-deck "p2" (repeat 10 "Sheep"))
+        (construct/add-cards-to-hand "p1" ["Sheep" "Boulderfist Ogre" "Leper Gnome" "Loot Hoarder"])
+        (construct/add-cards-to-hand "p2" ["Sheep" "Boulderfist Ogre" "Loot Hoarder"]))
+    ;; If game-params is provided (even if empty []), respect that and don't add defaults
+    state))

@@ -1,6 +1,6 @@
 (ns firestone.client.kth.edn-api
   (:require [firestone.construct :refer [create-game]]
-            [firestone.core :refer [attack play-card]]
+            [firestone.core :refer [attack play-card use-hero-power]]
             [firestone.core-api :as engine-api]
             [firestone.construct :as construct]
             [firestone.definitions-loader]
@@ -87,24 +87,31 @@
     state
     (map vector game-body ["p1" "p2"])))
 
-;; Create game function: creates a new game, maps its input, and stores it with history
 (defn create-game!
   [players-data]
-  (let [state (create-game players-data)
-        state' (map-game-input state players-data)
+  (let [;; Don't default to empty array - keep nil as nil to distinguish between "no data" and "empty data"
+        state (create-game players-data)
+        state' (map-game-input state (or players-data []))
+        ;; FIXED: Only add default cards when players-data is truly nil (no request data provided)
+        ;; If players-data is an empty array [], that means the client explicitly sent empty data
+        state-with-defaults (if (nil? players-data)
+                              (mapper/populate-default-cards state' nil)
+                              state')
         game-id "the-game-id"]
-    (add-new-game state' game-id)
-    [(mapper/game->client-game state' 0)]))
+    (add-new-game state-with-defaults game-id)
+    [(mapper/game->client-game state-with-defaults 0)]))
 
 (defn end-turn!
   [player-id]
   (let [game-id "the-game-id"
         current-game-state (get-game-state game-id)]
     (if current-game-state
-      (let [updated-game-state (engine-api/end-turn current-game-state player-id)
+      (let [;; Use provided player-id or get current player from game state
+            current-player (or player-id (construct/get-player-id-in-turn current-game-state))
+            updated-game-state (engine-api/end-turn current-game-state current-player)
             new-player-in-turn (get updated-game-state :player-id-in-turn)]
         (update-game-state game-id updated-game-state)
-        (println "Turn ended. New player in turn:" new-player-in-turn)
+        (println "Turn ended. Player:" current-player "New player in turn:" new-player-in-turn)
         (let [new-action-index (get-current-action-index game-id)]
           [(mapper/game->client-game updated-game-state new-action-index)]))
       (error "No game found for game-id" game-id))))
@@ -126,6 +133,17 @@
         current-game-state (get-game-state game-id)]
     (if current-game-state
       (let [updated-game-state (attack current-game-state player-id attacker-id target-id)]
+        (update-game-state game-id updated-game-state)
+        (let [new-action-index (get-current-action-index game-id)]
+          [(mapper/game->client-game updated-game-state new-action-index)]))
+      (error "No game found for game-id" game-id))))
+
+(defn use-hero-power!
+  [player-id target-id]
+  (let [game-id "the-game-id"
+        current-game-state (get-game-state game-id)]
+    (if current-game-state
+      (let [updated-game-state (use-hero-power current-game-state player-id target-id)]
         (update-game-state game-id updated-game-state)
         (let [new-action-index (get-current-action-index game-id)]
           [(mapper/game->client-game updated-game-state new-action-index)]))

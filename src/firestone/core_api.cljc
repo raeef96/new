@@ -15,9 +15,9 @@
                                          create-hero
                                          create-minion
                                          clear-sleepy-status-from-minions
-                                         reset-turn-static-properties                                         remove-can-attack
+                                         reset-turn-static-properties
                                          reset-attacks-performed-this-turn
-                                         get-hero-player-id
+                                         get-hero
                                          get-all-characters]]))
 
 (defn end-turn
@@ -57,54 +57,52 @@
 
         ;; Process end-of-turn effects
         current-player-minions (get-minions state player-id)
-        current-player-hero (get-hero-player-id state player-id)
-        state-after-end-turn-effects (effects-parser state
-                                                     (cons current-player-hero current-player-minions)
-                                                     player-id
-                                                     :end-of-turn)
+        current-player-hero (get-hero state player-id)
+        state (effects-parser state
+                              (cons current-player-hero current-player-minions)
+                              player-id
+                              :end-of-turn)
 
         ;; Process this-turn effects that need to expire
-        all-characters (get-all-characters state-after-end-turn-effects)
-        state-after-this-turn (effects-parser state-after-end-turn-effects
-                                              all-characters
-                                              player-id
-                                              :this-turn)
+        all-characters (get-all-characters state)
+        state (effects-parser state
+                              all-characters
+                              player-id
+                              :this-turn)
 
         ;; Apply basic state updates
-        updated-state (-> state-after-this-turn
-                          (clear-sleepy-status-from-minions)
-                          (reset-turn-static-properties next-player-id)
-                          ;; ✅ REMOVED: (remove-can-attack player-id) - not needed with Option 2
-                          (reset-attacks-performed-this-turn next-player-id)
-                          (update-hero (:id (get-hero-player-id state next-player-id)) :has-used-your-turn false)
-                          (assoc :minion-ids-summoned-this-turn [])
-                          (assoc :player-id-in-turn next-player-id)
-                          (reset-player-mana next-player-id))
+        state (-> state
+                  (clear-sleepy-status-from-minions)
+                  (reset-turn-static-properties next-player-id)
+                  (reset-attacks-performed-this-turn next-player-id)
+                  (update-hero next-player-id :has-used-your-turn false)
+                  (assoc :minion-ids-summoned-this-turn [])
+                  (assoc :player-id-in-turn next-player-id)
+                  (reset-player-mana next-player-id))
 
         ;; Process next-turn effects for the player beginning their turn
-        next-player-characters (cons (get-hero-player-id updated-state next-player-id)
-                                     (get-minions updated-state next-player-id))
-        state-after-next-turn (effects-parser updated-state
-                                              next-player-characters
-                                              next-player-id
-                                              :next-turn)
+        state (effects-parser state
+                              (cons (get-hero state next-player-id)
+                                    (get-minions state next-player-id))
+                              next-player-id
+                              :next-turn)
 
         ;; Handle fatigue or card drawing
-        state-after-draw (if (should-take-fatigue? state-after-next-turn next-player-id)
-                           (handle-fatigue state-after-next-turn next-player-id)
-                           (draw-card state-after-next-turn next-player-id))
+        state (if (should-take-fatigue? state next-player-id)
+                (handle-fatigue state next-player-id)
+                (draw-card state next-player-id))
 
         ;; Process aura effects after all state changes
-        state-after-auras (effects-parser state-after-draw
-                                          (concat (get-minions state-after-draw "p1")
-                                                  (get-minions state-after-draw "p2"))
-                                          next-player-id
-                                          :process-auras)
+        state (effects-parser state
+                              (concat (get-minions state "p1")
+                                      (get-minions state "p2"))
+                              next-player-id
+                              :process-auras)
 
         ;; Update attack targets
-        final-state (get-valid-attacks state-after-auras)]
+        state (get-valid-attacks state)]
 
-    final-state))
+    state))
 
 
 

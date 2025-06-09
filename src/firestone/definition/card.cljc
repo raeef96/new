@@ -20,7 +20,7 @@
                                          update-hero
                                          get-health]]))
 
-;; Card definitions - properties that describe each card
+;; Card definitions with embedded effect functions
 (def card-definitions
   {
    "Boulderfist Ogre"
@@ -40,7 +40,9 @@
     :set         :classic
     :rarity      :common
     :effect      "Leper Gnome effect"
-    :description "Deathrattle: Deal 2 damage to the enemy hero."}
+    :description "Deathrattle: Deal 2 damage to the enemy hero."
+    :deathrattle (fn [{:keys [state enemy-id]}]
+                   (update-hero state enemy-id :damage-taken #(+ % 2)))}
 
    "Loot Hoarder"
    {:name        "Loot Hoarder"
@@ -51,7 +53,9 @@
     :set         :classic
     :rarity      :common
     :effect      "Loot Hoarder effect"
-    :description "Deathrattle: Draw a card."}
+    :description "Deathrattle: Draw a card."
+    :deathrattle (fn [{:keys [state player-id]}]
+                   (draw-card state player-id))}
 
    "Sheep"
    {:name      "Sheep"
@@ -72,16 +76,49 @@
     :description "Stealth. At the end of your turn, summon a 1/1 Steward."
     :rarity      :legendary
     :set         :one-night-in-karazhan
-    :type        :minion}
-
+    :type        :minion
+    :end-of-turn (fn [{:keys [state id player-id]}]
+                   (let [source-minion (get-minion state id)
+                         source-position (:position source-minion)
+                         player-minions (get-minions state player-id)
+                         dire_wolves (filter #(= (:aura %) 1) player-minions)
+                         best-position (if (seq dire_wolves)
+                                         (let [wolf (first dire_wolves)
+                                               wolf-position (:position wolf)]
+                                           (if (> wolf-position source-position)
+                                             (max 0 (min (inc source-position) wolf-position))
+                                             (max 0 (min source-position (inc wolf-position)))))
+                                         (inc source-position))]
+                     (-> state
+                         (add-minion-to-board player-id (create-minion "Steward") best-position)
+                         (effects-parser (get-minions state player-id) player-id :process-auras))))}
    "Consecration"
    {:name         "Consecration"
     :mana-cost    4
     :description  "Deal 2 damage to all enemies."
-    :spell-effect "Consecration spell effect"
     :class        :paladin
     :set          :basic
-    :type         :spell}
+    :type         :spell
+    :spell-effect (fn [{:keys [state player-id enemy-id]}]
+                    (let [enemy-minions (get-minions state enemy-id)
+                          state (update-hero state enemy-id :damage-taken #(+ % 2))
+                          state (reduce
+                                  (fn [state minion]
+                                    (update-minion state (:id minion) :damage-taken #(+ % 2)))
+                                  state
+                                  enemy-minions)
+                          state (reduce
+                                  (fn [state minion-id]
+                                    (let [minion (get-minion state minion-id)]
+                                      (if minion
+                                        (let [current-health (get-health state minion-id)]
+                                          (if (<= current-health 0)
+                                            (remove-minion state minion-id)
+                                            state))
+                                        state)))
+                                  state
+                                  (map :id enemy-minions))]
+                      state))}
 
    "Kill Command"
    {:name         "Kill Command"
@@ -89,8 +126,27 @@
     :class        :hunter
     :set          :basic
     :type         :spell
-    :spell-effect "Kill Command spell effect"
-    :description  "Deal 3 damage. If you control a Beast deal 5 damage instead."}
+    :description  "Deal 3 damage. If you control a Beast deal 5 damage instead."
+    :spell-effect (fn [{:keys [state player-id target-id]}]
+                    (when target-id
+                      (let [has-beast (some #(= (:race %) :beast) (get-minions state player-id))
+                            damage (if has-beast 5 3)
+                            target (get-minion state target-id)]
+                        (cond
+                          (nil? target) state
+                          (= (:entity-type target) :minion)
+                          (let [state (update-minion state target-id :damage-taken #(+ % damage))
+                                target (get-minion state target-id)]
+                            (when target
+                              (let [definition (get-definition (:name target))
+                                    max-health (or (:health definition) 1)
+                                    is-dead (>= (:damage-taken target) max-health)]
+                                (if is-dead
+                                  (remove-minion state target-id)
+                                  state))))
+                          (= (:entity-type target) :hero)
+                          (update-hero state (:owner-id target) :damage-taken #(+ % damage))
+                          :else state))))}
 
    "Silver Hand Knight"
    {:name        "Silver Hand Knight"
@@ -101,7 +157,9 @@
     :description "Battlecry: Summon a 2/2 Squire."
     :rarity      :common
     :set         :classic
-    :type        :minion}
+    :type        :minion
+    :battlecry   (fn [{:keys [state player-id]}]
+                   (add-minion-to-board state player-id (create-minion "Squire") 0))}
 
    "Abusive Sergeant"
    {:name        "Abusive Sergeant"
@@ -112,7 +170,28 @@
     :rarity      :common
     :set         :classic
     :type        :minion
-    :description "Battlecry: Give a minion +2 Attack this turn."}
+    :description "Battlecry: Give a minion +2 Attack this turn."
+    :battlecry (fn [{:keys [state id player-id target-id]}]
+                 (when target-id
+                   (let [target (get-minion state target-id)]
+                     (when target
+                       (let [state (update-minion state target-id :overrides
+                                                  (fn [overrides]
+                                                    (update overrides :attack-bonus
+                                                            #(+ (or % 0) 2))))
+                             state (update-minion state target-id :effects
+                                                  (fn [effects]
+                                                    (conj (or effects [])
+                                                          {:this-turn
+                                                           (fn [{:keys [state id]}]
+                                                             (update-minion state id :overrides
+                                                                            (fn [overrides]
+                                                                              (let [current-bonus (get overrides :attack-bonus 0)
+                                                                                    new-bonus (- current-bonus 2)]
+                                                                                (if (<= new-bonus 0)
+                                                                                  (dissoc overrides :attack-bonus)
+                                                                                  (assoc overrides :attack-bonus new-bonus))))))})))]
+                         state)))))}
 
    "Stampeding Kodo"
    {:name        "Stampeding Kodo"
@@ -124,7 +203,13 @@
     :type        :minion
     :race        :beast
     :set         :classic
-    :rarity      :rare}
+    :rarity      :rare
+    :battlecry   (fn [{:keys [state enemy-id]}]
+                   (let [enemy-minions (get-minions state enemy-id)
+                         eligible-minions (filter #(<= (get-attack state (:id %)) 2) enemy-minions)]
+                     (when (seq eligible-minions)
+                       (let [target (rand-nth eligible-minions)]
+                         (remove-minion state (:id target))))))}
 
    "Mad Bomber"
    {:name        "Mad Bomber"
@@ -135,7 +220,19 @@
     :description "Battlecry: Deal 3 damage randomly split between all other characters."
     :rarity      :common
     :set         :classic
-    :type        :minion}
+    :type        :minion
+    :battlecry   (fn [{:keys [state id]}]
+                   (let [all-characters (filter #(not= (:id %) id) (get-all-characters state))]
+                     (loop [state state
+                            remaining 3]
+                       (if (zero? remaining)
+                         state
+                         (let [target (rand-nth all-characters)]
+                           (recur
+                             (if (= (:entity-type target) :hero)
+                               (update-hero state (:id target) :damage-taken inc)
+                               (update-minion state (:id target) :damage-taken inc))
+                             (dec remaining)))))))}
 
    "Twilight Drake"
    {:name        "Twilight Drake"
@@ -147,7 +244,11 @@
     :race        :dragon
     :type        :minion
     :set         :classic
-    :rarity      :rare}
+    :rarity      :rare
+    :battlecry   (fn [{:keys [state id player-id]}]
+                   (let [hand-size (count (get-hand state player-id))]
+                     (update-minion state id :overrides
+                                    #(assoc % :health-bonus (+ (get % :health-bonus 0) hand-size)))))}
 
    "Dr. Boom"
    {:name        "Dr. Boom"
@@ -158,7 +259,11 @@
     :description "Battlecry: Summon two 1/1 Boom Bots. WARNING: Bots may explode."
     :rarity      :legendary
     :set         :goblins-vs-gnomes
-    :type        :minion}
+    :type        :minion
+    :battlecry   (fn [{:keys [state player-id]}]
+                   (-> state
+                       (add-minion-to-board player-id (create-minion "Boom Bot") 0)
+                       (add-minion-to-board player-id (create-minion "Boom Bot") 0)))}
 
    "Blood Imp"
    {:name        "Blood Imp"
@@ -172,26 +277,45 @@
     :type        :minion
     :class       :warlock
     :set         :classic
-    :rarity      :common}
+    :rarity      :common
+    :end-of-turn (fn [{:keys [state id player-id]}]
+                   (let [friendly-minions (filter #(not= (:id %) id) (get-minions state player-id))]
+                     (when (seq friendly-minions)
+                       (let [random-minion (rand-nth friendly-minions)]
+                         (update-minion state (:id random-minion) :overrides
+                                        #(assoc % :health-bonus (+ (get % :health-bonus 0) 1)))))))}
 
    "Equality"
    {:name         "Equality"
     :mana-cost    2
     :description  "Change the Health of ALL minions to 1."
-    :spell-effect "Equality spell effect"
     :class        :paladin
     :set          :classic
-    :type         :spell}
+    :type         :spell
+    :spell-effect (fn [{:keys [state]}]
+                    (let [all-minions (get-minions state)]
+                      (reduce (fn [state minion]
+                                (let [definition (get-definition (:name minion))
+                                      max-health (or (:health definition) 1)
+                                      new-damage (max 0 (- max-health 1))]
+                                  (update-minion state (:id minion) :damage-taken new-damage)))
+                              state
+                              all-minions)))}
 
    "Feign Death"
    {:name         "Feign Death"
     :mana-cost    2
     :description  "Trigger all Deathrattles on your minions."
-    :spell-effect "Feign Death spell effect"
     :class        :hunter
     :rarity       :epic
     :set          :goblins-vs-gnomes
-    :type         :spell}
+    :type         :spell
+    :spell-effect (fn [{:keys [state player-id]}]
+                    (let [player-minions (get-minions state player-id)]
+                      (reduce (fn [state minion]
+                                (effects-parser state [minion] player-id :deathrattle))
+                              state
+                              player-minions)))}
 
    "Squire"
    {:name      "Squire"
@@ -211,7 +335,16 @@
     :type        :minion
     :race        :mech
     :set         :goblins-vs-gnomes
-    :description "Deathrattle: Deal 1-4 damage to a random enemy."}
+    :description "Deathrattle: Deal 1-4 damage to a random enemy."
+    :deathrattle (fn [{:keys [state player-id enemy-id]}]
+                   (let [damage (inc (rand-int 4))
+                         enemy-minions (get-minions state enemy-id)
+                         enemy-hero (get-hero state enemy-id)
+                         targets (cons enemy-hero enemy-minions)
+                         target (rand-nth targets)]
+                     (if (= (:entity-type target) :hero)
+                       (update-hero state enemy-id :damage-taken #(+ % damage))
+                       (update-minion state (:id target) :damage-taken #(+ % damage)))))}
 
    "Steward"
    {:name      "Steward"
@@ -222,15 +355,22 @@
     :set       :one-night-in-karazhan}
 
    "Knife Juggler"
-   {:name        "Knife Juggler"
-    :attack      3
-    :health      2
-    :mana-cost   2
-    :effect      "Knife Juggler effect"
-    :rarity      :rare
-    :set         :classic
-    :type        :minion
-    :description "After you summon a minion, deal 1 damage to a random enemy."}
+   {:name          "Knife Juggler"
+    :attack        3
+    :health        2
+    :mana-cost     2
+    :effect        "Knife Juggler effect"
+    :rarity        :rare
+    :set           :classic
+    :type          :minion
+    :description   "After you summon a minion, deal 1 damage to a random enemy."
+    :summon-minion (fn [{:keys [state enemy-id]}]
+                     (let [all-enemy-characters (cons (get-hero state enemy-id)
+                                                      (get-minions state enemy-id))
+                           target (rand-nth all-enemy-characters)]
+                       (if (= (:entity-type target) :hero)
+                         (update-hero state enemy-id :damage-taken inc)
+                         (update-minion state (:id target) :damage-taken inc))))}
 
    "Questing Adventurer"
    {:name        "Questing Adventurer"
@@ -241,40 +381,67 @@
     :rarity      :rare
     :set         :classic
     :type        :minion
-    :description "Whenever you play a card, gain +1/+1."}
+    :description "Whenever you play a card, gain +1/+1."
+    :play-card   (fn [{:keys [state id]}]
+                   (-> state
+                       (update-minion id :overrides
+                                      #(-> %
+                                           (assoc :attack-bonus (+ (get % :attack-bonus 0) 1))
+                                           (assoc :health-bonus (+ (get % :health-bonus 0) 1))))))}
 
    "Dire Wolf Alpha"
-   {:name        "Dire Wolf Alpha"
-    :attack      2
-    :health      2
-    :mana-cost   2
-    :effect      "Dire Wolf Alpha effect"
-    :set         :classic
-    :race        :beast
-    :type        :minion
-    :rarity      :common
-    :aura        1
-    :description "Adjacent minions have +1 Attack."}
+   {:name          "Dire Wolf Alpha"
+    :attack        2
+    :health        2
+    :mana-cost     2
+    :effect        "Dire Wolf Alpha effect"
+    :set           :classic
+    :race          :beast
+    :type          :minion
+    :rarity        :common
+    :aura          1
+    :description   "Adjacent minions have +1 Attack."
+    :process-auras (fn [{:keys [state]}]
+                     state)}
 
    "Explosive Trap"
-   {:name         "Explosive Trap"
-    :mana-cost    2
-    :class        :hunter
-    :rarity       :common
-    :set          :classic
-    :type         :spell
-    :spell-effect "Explosive Trap spell effect"
-    :description  "Secret: When your hero is attacked deal 2 damage to all enemies."}
+   {:name           "Explosive Trap"
+    :mana-cost      2
+    :class          :hunter
+    :rarity         :common
+    :set            :classic
+    :type           :spell
+    :description    "Secret: When your hero is attacked deal 2 damage to all enemies."
+    :spell-effect   (fn [{:keys [state player-id]}]
+                      (add-card-to-secrets state player-id (create-card "Explosive Trap")))
+    :hero-attacked  (fn [{:keys [state id player-id enemy-id args]}]
+                      (let [enemy-minions (get-minions state enemy-id)
+                            state (update-in state [:players player-id :secrets]
+                                             (fn [secrets]
+                                               (filter #(not= (:id %) id) secrets)))
+                            state (update-hero state enemy-id :damage-taken #(+ % 2))
+                            state (reduce (fn [state minion]
+                                            (update-minion state (:id minion) :damage-taken #(+ % 2)))
+                                          state
+                                          enemy-minions)]
+                        state))}
 
    "Cat Trick"
-   {:name         "Cat Trick"
-    :mana-cost    2
-    :class        :hunter
-    :rarity       :rare
-    :set          :one-night-in-karazhan
-    :type         :spell
-    :spell-effect "Cat Trick spell effect"
-    :description  "Secret: After your opponent casts a spell, summon a 4/2 Panther with Stealth."}
+   {:name                "Cat Trick"
+    :mana-cost           2
+    :class               :hunter
+    :rarity              :rare
+    :set                 :one-night-in-karazhan
+    :type                :spell
+    :description         "Secret: After your opponent casts a spell, summon a 4/2 Panther with Stealth."
+    :spell-effect        (fn [{:keys [state player-id]}]
+                           (add-card-to-secrets state player-id (create-card "Cat Trick")))
+    :opponent-play-spell (fn [{:keys [state id player-id]}]
+                           (-> state
+                               (update-in [:players player-id :secrets]
+                                          (fn [secrets]
+                                            (filter #(not= (:id %) id) secrets)))
+                               (add-minion-to-board player-id (create-minion "Cat in a Hat") 0)))}
 
    "Cat in a Hat"
    {:name        "Cat in a Hat"
@@ -287,721 +454,236 @@
     :set         :one-night-in-karazhan
     :description "Stealth"}
 
-  "Alexstrasza"
-  {:name        "Alexstrasza"
-   :attack      8
-   :mana-cost   9
-   :health      8
-   :race        :dragon
-   :effect      "Alexstrasza effect"
-   :type        :minion
-   :set         :classic
-   :rarity      :legendary
-   :description "Battlecry: Set a hero's remaining Health to 15."}
+   "Alexstrasza"
+   {:name        "Alexstrasza"
+    :attack      8
+    :mana-cost   9
+    :health      8
+    :race        :dragon
+    :effect      "Alexstrasza effect"
+    :type        :minion
+    :set         :classic
+    :rarity      :legendary
+    :description "Battlecry: Set a hero's remaining Health to 15."
+    :battlecry   (fn [{:keys [state target-id]}]
+                   (when target-id
+                     (let [target (get-hero state target-id)]
+                       (when target
+                         (update-hero state target-id :damage-taken
+                                      (fn [_] (- (:health target) 15)))))))}
 
-  "Master of Disguise"
-  {:name        "Master of Disguise"
-   :attack      4
-   :health      4
-   :mana-cost   4
-   :effect      "Master of Disguise effect"
-   :type        :minion
-   :class       :rogue
-   :set         :classic
-   :rarity      :rare
-   :description "Battlecry: Give a friendly minion Stealth until your next turn."}
-
-  "Infest"
-  {:name         "Infest"
-   :mana-cost    3
-   :class        :hunter
-   :rarity       :rare
-   :set          :whispers-of-the-old-gods
-   :type         :spell
-   :spell-effect "Infest spell effect"
-   :description  "Give your minions \"Deathrattle: Add a random Beast to your hand.\""}
-
-  "Ragnaros the Firelord"
-  {:name        "Ragnaros the Firelord"
-   :mana-cost   8
-   :health      8
-   :attack      8
-   :effect      "Ragnaros the Firelord effect"
-   :race        :elemental
-   :type        :minion
-   :set         :hall-of-fame
-   :rarity      :legendary
-   :description "Can't attack. At the end of your turn, deal 8 damage to a random enemy."}
-
-  "Shadow Sensei"
-  {:name        "Shadow Sensei"
-   :attack      4
-   :health      4
-   :mana-cost   4
-   :effect      "Shadow Sensei effect"
-   :type        :minion
-   :class       :rogue
-   :set         :mean-streets-of-gadgetzan
-   :rarity      :rare
-   :description "Battlecry: Give a Stealthed minion +2/+2."}
-
-  "Frothing Berserker"
-  {:name        "Frothing Berserker"
-   :mana-cost   3
-   :health      4
-   :attack      2
-   :effect      "Frothing Berserker effect"
-   :type        :minion
-   :class       :warrior
-   :set         :classic
-   :rarity      :rare
-   :description "Whenever a minion takes damage, gain +1 Attack."}
-
-  "Baron Geddon"
-  {:name        "Baron Geddon"
-   :attack      7
-   :health      5
-   :mana-cost   7
-   :effect      "Baron Geddon effect"
-   :race        :elemental
-   :type        :minion
-   :set         :classic
-   :rarity      :legendary
-   :description "At the end of your turn, deal 2 damage to ALL other characters."}
-
-  "Misdirection"
-  {:name         "Misdirection"
-   :mana-cost    2
-   :class        :hunter
-   :rarity       :rare
-   :set          :classic
-   :type         :spell
-   :spell-effect "Misdirection spell effect"
-   :description  "Secret: When a character attacks your hero instead he attacks another random character."}
-
-  "Raid Leader"
-  {:name        "Raid Leader"
-   :attack      2
-   :health      2
-   :mana-cost   3
-   :effect      "Raid Leader effect"
-   :set         :basic
-   :type        :minion
-   :description "Your other minions have +1 Attack."}
-
-  "Shudderwock"
-  {:name        "Shudderwock"
-   :attack      6
-   :health      6
-   :mana-cost   9
-   :effect      "Shudderwock effect"
-   :type        :minion
-   :class       :shaman
-   :set         :the-witchwood
-   :rarity      :legendary
-   :description "Battlecry: Repeat all other Battlecries from cards you played this game (targets chosen randomly)."}
-
-  "Unearthed Raptor"
-  {:name        "Unearthed Raptor"
-   :attack      3
-   :health      4
-   :mana-cost   3
-   :effect      "Unearthed Raptor effect"
-   :type        :minion
-   :class       :rogue
-   :set         :the-league-of-explorers
-   :rarity      :rare
-   :description "Battlecry: Choose a friendly minion. Gain a copy of its Deathrattle effect."}
-})
-
-
-
-
-;; Effect definitions - functions that implement effects for cards
-(def effect-definitions
-  {
-   ;; Deathrattle effects
-   "Leper Gnome effect"
-   {:name        "Leper Gnome effect"
-    :description "Deathrattle: Deal 2 damage to the enemy hero."
-    :deathrattle (fn [state id player-id enemy-id target-id]
-                   (update-hero state enemy-id :damage-taken #(+ % 2)))}
-
-   "Loot Hoarder effect"
-   {:name        "Loot Hoarder effect"
-    :description "Deathrattle: Draw a card."
-    :deathrattle (fn [state id player-id enemy-id target-id]
-                   (draw-card state player-id))}
-
-   "Boom Bot effect"
-   {:name        "Boom Bot effect"
-    :description "Deathrattle: Deal 1-4 damage to a random enemy."
-    :deathrattle (fn [state id player-id enemy-id target-id]
-                   (let [damage (inc (rand-int 4))
-                         enemy-minions (get-minions state enemy-id)
-                         enemy-hero (get-hero state enemy-id)
-                         targets (cons enemy-hero enemy-minions)
-                         target (rand-nth targets)]
-                     (if (= (:entity-type target) :hero)
-                       (update-hero state enemy-id :damage-taken #(+ % damage))
-                       (update-minion state (:id target) :damage-taken #(+ % damage)))))}
-
-   ;; End of turn effects
-   "Moroes effect"
-   {:name        "Moroes effect"
-    :description "At the end of your turn, summon a 1/1 Steward."
-    :end-of-turn (fn [state id player-id enemy-id target-id]
-                   (let [source-minion (get-minion state id)
-                         source-position (:position source-minion)
-
-                         ;; Look for Dire Wolf Alpha minions on the board
-                         player-minions (get-minions state player-id)
-                         dire_wolves (filter #(= (:name %) "Dire Wolf Alpha") player-minions)
-
-                         ;; Calculate the best position for maximum aura benefit
-                         best-position (if (seq dire_wolves)
-                                         ;; If there's a Dire Wolf Alpha, place adjacent to it
-                                         (let [wolf (first dire_wolves)
-                                               wolf-position (:position wolf)]
-                                           ;; Choose a position adjacent to the wolf
-                                           (if (> wolf-position source-position)
-                                             ;; If wolf is to the right, place the Steward between Moroes and the wolf
-                                             (max 0 (min (inc source-position) wolf-position))
-                                             ;; If wolf is to the left, place the Steward between Moroes and the wolf
-                                             (max 0 (min source-position (inc wolf-position)))))
-                                         ;; Default position right next to Moroes
-                                         (inc source-position))]
-
-                     ;; Add the minion at the calculated position
-                     (-> state
-                         (add-minion-to-board player-id (create-minion "Steward") best-position)
-                         ;; After adding the minion, make sure to recalculate all aura effects
-                         (effects-parser (get-minions state player-id) player-id :process-auras))))}
-
-   "Blood Imp effect"
-   {:name        "Blood Imp effect"
-    :description "At the end of your turn give another random friendly minion +1 Health."
-    :end-of-turn (fn [state id player-id enemy-id target-id]
-                   (let [friendly-minions (filter #(not= (:id %) id) (get-minions state player-id))]
-                     (if (seq friendly-minions)
-                       (let [random-minion (rand-nth friendly-minions)]
-                         ;; FIXED: Use overrides instead of trying to modify :health
-                         (update-minion state (:id random-minion) :overrides
-                                        #(assoc % :health-bonus (+ (get % :health-bonus 0) 1))))
-                       state)))}
-
-   ;; Battlecry effects
-   "Silver Hand Knight effect"
-   {:name        "Silver Hand Knight effect"
-    :description "Battlecry: Summon a 2/2 Squire."
-    :battlecry   (fn [state id player-id enemy-id target-id]
-                   (add-minion-to-board state player-id (create-minion "Squire") 0))}
-
-   "Abusive Sergeant effect"
-   {:name        "Abusive Sergeant effect"
-    :description "Battlecry: Give a minion +2 Attack this turn."
-    :battlecry   (fn [state source-id player-id enemy-id target-id]
-                   (println "Abusive Sergeant battlecry called with:")
-                   (println "  source-id:" source-id)
-                   (println "  player-id:" player-id)
-                   (println "  enemy-id:" enemy-id)
-                   (println "  target-id:" target-id)
-
-                   (cond
-                     ;; If target is nil, return unchanged state
-                     (nil? target-id)
-                     (do
-                       (println "No target specified for Abusive Sergeant")
-                       state)
-
-                     ;; If target is a number (position), find minion at that position
-                     (number? target-id)
-                     (let [position target-id
-                           enemy-minions (get-minions state enemy-id)
-                           friendly-minions (get-minions state player-id)
-                           all-minions (concat friendly-minions enemy-minions)
-                           target-minion (first (filter #(= (:position %) position) all-minions))]
-                       (if target-minion
-                         (do
-                           (println "Found target by position:" (:name target-minion))
-                           (-> state
-                               ;; FIXED: Use overrides instead of trying to modify :attack
-                               (update-minion (:id target-minion) :overrides
-                                              #(assoc % :attack-bonus (+ (get % :attack-bonus 0) 2)))
-                               (update-minion (:id target-minion) :effects
-                                              (fn [effects] (conj (or effects []) "Abusive Sergeant reduction")))))
-                         (do
-                           (println "No minion found at position" position)
-                           state)))
-
-                     ;; Otherwise try to find minion by ID
-                     :else
-                     (let [target-minion (get-minion state target-id)]
-                       (if target-minion
-                         (do
-                           (println "Found target by ID:" (:name target-minion))
-                           (-> state
-                               ;; FIXED: Use overrides instead of trying to modify :attack
-                               (update-minion target-id :overrides
-                                              #(assoc % :attack-bonus (+ (get % :attack-bonus 0) 2)))
-                               (update-minion target-id :effects
-                                              (fn [effects] (conj (or effects []) "Abusive Sergeant reduction")))))
-                         (do
-                           (println "No minion found with ID" target-id)
+   "Master of Disguise"
+   {:name        "Master of Disguise"
+    :attack      4
+    :health      4
+    :mana-cost   4
+    :effect      "Master of Disguise effect"
+    :type        :minion
+    :class       :rogue
+    :set         :classic
+    :rarity      :rare
+    :description "Battlecry: Give a friendly minion Stealth until your next turn."
+    :battlecry   (fn [{:keys [state target-id player-id]}]
+                   (when target-id
+                     (let [target (get-minion state target-id)]
+                       (when (and target (= (:owner-id target) player-id))
+                         (let [state (update-minion state target-id :states
+                                                    (fn [states]
+                                                      (if (some #(= % :stealth) states)
+                                                        states
+                                                        (conj (or states []) :stealth))))
+                               state (update-minion state target-id :effects
+                                                    (fn [effects]
+                                                      (conj (or effects [])
+                                                            {:next-turn
+                                                             (fn [{:keys [state id]}]
+                                                               (update-minion state id :states
+                                                                              (fn [states]
+                                                                                (filter #(not= % :stealth) states))))})))]
                            state)))))}
 
-   "Abusive Sergeant reduction"
-   {:name      "Abusive Sergeant reduction"
-    :this-turn (fn [state id player-id enemy-id target-id]
-                 (-> state
-                     ;; FIXED: Remove exactly 2 attack bonus (the amount that was added)
-                     (update-minion id :overrides
-                                    #(let [current-bonus (get % :attack-bonus 0)
-                                           new-bonus (- current-bonus 2)]
-                                       (if (<= new-bonus 0)
-                                         (dissoc % :attack-bonus)  ; Remove if zero or negative
-                                         (assoc % :attack-bonus new-bonus))))
-                     (update-minion id :effects #(filter (fn [e] (not= e "Abusive Sergeant reduction")) %))))}
-
-   "Stampeding Kodo effect"
-   {:name        "Stampeding Kodo effect"
-    :description "Battlecry: Destroy a random enemy minion with 2 or less Attack."
-    :battlecry   (fn [state id player-id enemy-id target-id]
-                   (let [enemy-minions (get-minions state enemy-id)
-                         ;; BEST: Use get-attack function (includes base + aura + overrides)
-                         eligible-minions (filter #(<= (get-attack state (:id %)) 2) enemy-minions)]
-                     (if (seq eligible-minions)
-                       (let [target (rand-nth eligible-minions)]
-                         (remove-minion state (:id target)))
-                       state)))}
-
-   "Mad Bomber effect"
-   {:name        "Mad Bomber effect"
-    :description "Battlecry: Deal 3 damage randomly split between all other characters."
-    :battlecry   (fn [state id player-id enemy-id target-id]
-                   (let [all-characters (filter #(not= (:id %) id) (get-all-characters state))]
-                     (loop [s state
-                            remaining 3]
-                       (if (zero? remaining)
-                         s
-                         (let [target (rand-nth all-characters)]
-                           (recur
-                             (if (= (:entity-type target) :hero)
-                               (update-hero s (:id target) :damage-taken inc)
-                               (update-minion s (:id target) :damage-taken inc))
-                             (dec remaining)))))))}
-
-   "Twilight Drake effect"
-   {:name        "Twilight Drake effect"
-    :description "Battlecry: Gain +1 Health for each card in your hand."
-    :battlecry   (fn [state id player-id enemy-id target-id]
-                   (let [hand-size (count (get-hand state player-id))]
-                     ;; FIXED: Use overrides for permanent health bonus
-                     (update-minion state id :overrides
-                                    #(assoc % :health-bonus (+ (get % :health-bonus 0) hand-size)))))}
-
-   "Dr. Boom effect"
-   {:name        "Dr. Boom effect"
-    :description "Battlecry: Summon two 1/1 Boom Bots."
-    :battlecry   (fn [state id player-id enemy-id target-id]
-                   (-> state
-                       (add-minion-to-board player-id (create-minion "Boom Bot") 0)
-                       (add-minion-to-board player-id (create-minion "Boom Bot") 0)))}
-
-   ;; Minion summoned effects
-   "Knife Juggler effect"
-   {:name          "Knife Juggler effect"
-    :description   "After you summon a minion, deal 1 damage to a random enemy."
-    :summon-minion (fn [state id player-id enemy-id target-id]
-                     (let [all-enemy-characters (cons (get-hero state enemy-id)
-                                                      (get-minions state enemy-id))
-                           target (rand-nth all-enemy-characters)]
-                       (if (= (:entity-type target) :hero)
-                         (update-hero state enemy-id :damage-taken inc)
-                         (update-minion state (:id target) :damage-taken inc))))}
-
-   ;; FIXED: Questing Adventurer effect
-   "Questing Adventurer effect"
-   {:name      "Questing Adventurer effect"
-    :description "Whenever you play a card, gain +1/+1."
-    :play-card (fn [state id player-id enemy-id target-id]
-                 (-> state
-                     ;; FIXED: Use overrides instead of trying to modify :attack and :health
-                     (update-minion id :overrides
-                                    #(-> %
-                                         (assoc :attack-bonus (+ (get % :attack-bonus 0) 1))
-                                         (assoc :health-bonus (+ (get % :health-bonus 0) 1))))))}
-
-   "Dire Wolf Alpha effect"
-   {:name        "Dire Wolf Alpha effect"
-    :description "Adjacent minions have +1 Attack."
-    :process-auras (fn [state id player-id enemy-id target-id]
-                     ;; This function is called to recalculate aura effects
-                     ;; after minion positions change
-                     ;; Return the state unchanged - the actual attack bonus
-                     ;; is calculated dynamically in get-attack
-                     state)}
-
-   ;; Spell effects
-   ;; Then use get-health for cleaner death checks:
-   "Consecration spell effect"
-   {:name         "Consecration spell effect"
-    :description  "Deal 2 damage to all enemies."
-    :spell-effect (fn [state id player-id enemy-id target-id]
-                    (println "Consecration effect executing:")
-                    (println "  Player ID:" player-id)
-                    (println "  Enemy ID:" enemy-id)
-
-                    (let [enemy-minions (get-minions state enemy-id)]
-                      (println "  Enemy minions:" (map #(select-keys % [:id :name :damage-taken]) enemy-minions))
-
-                      ;; Update hero damage
-                      (println "  Updating enemy hero damage")
-                      (let [state-after-hero (update-hero state enemy-id :damage-taken #(+ % 2))
-
-                            ;; Update minion damage
-                            state-after-minions (reduce
-                                                  (fn [state minion]
-                                                    (println "    Updating minion damage for" (:name minion) "with ID" (:id minion))
-                                                    (update-minion state (:id minion) :damage-taken #(+ % 2)))
-                                                  state-after-hero
-                                                  enemy-minions)
-
-                            ;; BEST: Use get-health function for death checks
-                            final-state (reduce
-                                          (fn [state minion-id]
-                                            (let [minion (get-minion state minion-id)]
-                                              (if minion
-                                                (let [current-health (get-health state minion-id)]
-                                                  (if (<= current-health 0)
-                                                    (do
-                                                      (println "Removing dead minion:" (:name minion))
-                                                      (remove-minion state minion-id))
-                                                    state))
-                                                state)))
-                                          state-after-minions
-                                          (map :id enemy-minions))]
-
-                        ;; Final state check
-                        (println "  After cleanup, enemy minions:"
-                                 (map #(select-keys % [:id :name :damage-taken])
-                                      (get-minions final-state enemy-id)))
-                        final-state)))}
-
-   ;; FIXED: Kill Command spell effect - also has death check issue
-   "Kill Command spell effect"
-   {:name         "Kill Command spell effect"
-    :description  "Deal 3 damage. If you control a Beast deal 5 damage instead."
-    :spell-effect (fn [state id player-id enemy-id target-id]
-                    (println "Kill Command effect executing:")
-                    (println "  Source ID:" id)
-                    (println "  Player ID:" player-id)
-                    (println "  Enemy ID:" enemy-id)
-                    (println "  Target ID:" target-id)
-
-                    (if (nil? target-id)
-                      (do
-                        (println "Error: No target specified for Kill Command")
-                        state)
-                      (let [has-beast (some #(= (:race %) :beast) (get-minions state player-id))
-                            damage (if has-beast 5 3)
-                            target (get-minion state target-id)]
-
-                        (println "  Has beast minion:" has-beast)
-                        (println "  Damage to deal:" damage)
-                        (println "  Target found:" (if target "Yes" "No"))
-                        (if target
-                          (println "  Target details:" (select-keys target [:id :name :health :damage-taken]))
-                          (println "  Warning: Target minion not found with ID" target-id))
-
-                        (cond
-                          ;; No target found
-                          (nil? target)
-                          (do
-                            (println "  Kill Command failed: target not found")
-                            state)
-
-                          ;; Target is a minion
-                          (= (:entity-type target) :minion)
-                          (let [updated-state (update-minion state target-id :damage-taken #(+ % damage))
-                                updated-target (get-minion updated-state target-id)
-                                ;; FIXED: Use definition to check death
-                                final-state (if updated-target
-                                              (let [definition (get-definition (:name updated-target))
-                                                    max-health (or (:health definition) 1)
-                                                    is-dead (>= (:damage-taken updated-target) max-health)]
-                                                (if is-dead
-                                                  (do
-                                                    (println "  Removing dead minion:" (:name updated-target))
-                                                    (remove-minion updated-state target-id))
-                                                  updated-state))
-                                              updated-state)]
-                            (println "  Kill Command successful on minion")
-                            (println "  Updated target:" (select-keys (get-minion updated-state target-id)
-                                                                      [:id :name :health :damage-taken]))
-                            final-state)
-
-                          ;; Target is a hero
-                          (= (:entity-type target) :hero)
-                          (do
-                            (println "  Kill Command dealing damage to hero")
-                            (update-hero state (:owner-id target) :damage-taken #(+ % damage)))
-
-                          :else
-                          (do
-                            (println "  Kill Command failed: unknown entity type")
-                            state)))))}
-
-   "Equality spell effect"
-   {:name         "Equality spell effect"
-    :description  "Change the Health of ALL minions to 1."
-    :spell-effect (fn [state id player-id enemy-id target-id]
-                    (let [all-minions (get-minions state)]
-                      (reduce (fn [s minion]
-                                (let [definition (get-definition (:name minion))
-                                      max-health (or (:health definition) 1)
-                                      new-damage (max 0 (- max-health 1))]
-                                  (update-minion s (:id minion) :damage-taken new-damage)))
-                              state
-                              all-minions)))}
-
-   "Feign Death spell effect"
-   {:name         "Feign Death spell effect"
-    :description  "Trigger all Deathrattles on your minions."
-    :spell-effect (fn [state id player-id enemy-id target-id]
-                    (let [player-minions (get-minions state player-id)]
-                      (reduce (fn [s minion]
-                                (effects-parser s [minion] player-id :deathrattle))
+   "Infest"
+   {:name         "Infest"
+    :mana-cost    3
+    :class        :hunter
+    :rarity       :rare
+    :set          :whispers-of-the-old-gods
+    :type         :spell
+    :description  "Give your minions \"Deathrattle: Add a random Beast to your hand.\""
+    :spell-effect (fn [{:keys [state player-id]}]
+                    (let [player-minions (get-minions state player-id)
+                          infest-deathrattle {:deathrattle (fn [{:keys [state player-id]}]
+                                                             (let [beast-cards (filter #(= (:race %) :beast)
+                                                                                       (map #(get-definition %)
+                                                                                            (keys (get-definitions))))]
+                                                               (when (seq beast-cards)
+                                                                 (let [random-beast (rand-nth beast-cards)]
+                                                                   (add-card-to-hand state player-id (:name random-beast))))))}]
+                      (reduce (fn [state minion]
+                                (update-minion state (:id minion) :effects
+                                               (fn [effects] (conj (or effects []) infest-deathrattle))))
                               state
                               player-minions)))}
 
-   "Explosive Trap spell effect"
-   {:name          "Explosive Trap spell effect"
-    :description   "Secret: When your hero is attacked deal 2 damage to all enemies."
-    :spell-effect  (fn [state id player-id enemy-id target-id]
-                     (println "Adding Explosive Trap secret to player" player-id)
-                     (add-card-to-secrets state player-id (create-card "Explosive Trap")))
-    :hero-attacked (fn [state id player-id enemy-id args]
-                     (println "EXECUTING EXPLOSIVE TRAP SECRET!")
-                     (println "  Secret ID:" id)
-                     (println "  Player ID:" player-id)
-                     (println "  Enemy ID:" enemy-id)
+   "Ragnaros the Firelord"
+   {:name        "Ragnaros the Firelord"
+    :mana-cost   8
+    :health      8
+    :attack      8
+    :effect      "Ragnaros the Firelord effect"
+    :race        :elemental
+    :type        :minion
+    :set         :hall-of-fame
+    :rarity      :legendary
+    :description "Can't attack. At the end of your turn, deal 8 damage to a random enemy."
+    :end-of-turn (fn [{:keys [state enemy-id]}]
+                   (let [enemy-characters (cons (get-hero state enemy-id)
+                                                (get-minions state enemy-id))]
+                     (when (seq enemy-characters)
+                       (let [target (rand-nth enemy-characters)]
+                         (if (= (:entity-type target) :hero)
+                           (update-hero state enemy-id :damage-taken #(+ % 8))
+                           (update-minion state (:id target) :damage-taken #(+ % 8)))))))}
 
-                     ;; Get attacker ID from args
-                     (let [attacker-id (:attacker-id args)
-                           enemy-minions (get-minions state enemy-id)]
-
-                       (println "  Found" (count enemy-minions) "enemy minions")
-                       (println "  Removing secret and applying damage")
-
-                       (-> state
-                           ;; Remove this secret
-                           (update-in [:players player-id :secrets]
-                                      (fn [secrets]
-                                        (filter #(not= (:id %) id) secrets)))
-                           ;; Damage the enemy hero
-                           (update-hero enemy-id :damage-taken #(+ % 2))
-                           ;; Damage all enemy minions
-                           (as-> s
-                                 (reduce (fn [state minion]
-                                           (update-minion state (:id minion) :damage-taken #(+ % 2)))
-                                         s
-                                         enemy-minions)))))}
-
-   "Cat Trick spell effect"
-   {:name                "Cat Trick spell effect"
-    :description         "Secret: After your opponent casts a spell, summon a 4/2 Panther with Stealth."
-    :spell-effect        (fn [state id player-id enemy-id target-id]
-                           (add-card-to-secrets state player-id (create-card "Cat Trick")))
-    :opponent-play-spell (fn [state id player-id enemy-id target-id]
-                           (-> state
-                               (update-in [:players player-id :secrets]
-                                          (fn [secrets]
-                                            (filter #(not= (:name %) "Cat Trick") secrets)))
-                               (add-minion-to-board player-id (create-minion "Cat in a Hat") 0)))}
-
-  "Alexstrasza effect"
-  {:name        "Alexstrasza effect"
-   :description "Battlecry: Set a hero's remaining Health to 15."
-   :battlecry   (fn [state id player-id enemy-id target-id]
-                  (if (nil? target-id)
-                    state
-                    (let [target (get-hero state target-id)]
-                      (if target
-                        (update-hero state target-id :damage-taken
-                                     (fn [_] (- (:health target) 15)))
-                        state))))}
-
-  "Master of Disguise effect"
-  {:name        "Master of Disguise effect"
-   :description "Battlecry: Give a friendly minion Stealth until your next turn."
-   :battlecry   (fn [state id player-id enemy-id target-id]
-                  (if (nil? target-id)
-                    state
-                    (let [target (get-minion state target-id)]
-                      (if (and target (= (:owner-id target) player-id))
-                        (-> state
-                            (update-minion target-id :states
-                                           (fn [states]
-                                             (if (some #(= % :stealth) states)
-                                               states
-                                               (conj (or states []) :stealth))))
-                            (update-minion target-id :effects
-                                           (fn [effects] (conj (or effects []) "Master of Disguise reduction"))))
-                        state))))}
-
-  "Master of Disguise reduction"
-  {:name      "Master of Disguise reduction"
-   :next-turn (fn [state id player-id enemy-id target-id]
-                (-> state
-                    (update-minion id :states
-                                   (fn [states] (filter #(not= % :stealth) states)))
-                    (update-minion id :effects
-                                   (fn [effects] (filter #(not= % "Master of Disguise reduction") effects)))))}
-
-  "Infest spell effect"
-  {:name         "Infest spell effect"
-   :description  "Give your minions \"Deathrattle: Add a random Beast to your hand.\""
-   :spell-effect (fn [state id player-id enemy-id target-id]
-                   (let [player-minions (get-minions state player-id)]
-                     (reduce (fn [s minion]
-                               (update-minion s (:id minion) :effects
-                                              (fn [effects] (conj (or effects []) "Infest effect"))))
-                             state
-                             player-minions)))}
-
-  "Infest effect"
-  {:name        "Infest effect"
-   :description "Deathrattle: Add a random Beast to your hand."
-   :deathrattle (fn [state id player-id enemy-id target-id]
-                  (let [beast-cards (filter #(= (:race %) :beast)
-                                            (map #(get-definition %)
-                                                 (keys (get-definitions))))]
-                    (if (seq beast-cards)
-                      (let [random-beast (rand-nth beast-cards)]
-                        (add-card-to-hand state player-id (:name random-beast)))
-                      state)))}
-
-  "Ragnaros the Firelord effect"
-  {:name        "Ragnaros the Firelord effect"
-   :description "Can't attack. At the end of your turn, deal 8 damage to a random enemy."
-   :end-of-turn (fn [state id player-id enemy-id target-id]
-                  (let [enemy-characters (cons (get-hero state enemy-id)
-                                               (get-minions state enemy-id))]
-                    (if (seq enemy-characters)
-                      (let [target (rand-nth enemy-characters)]
-                        (if (= (:entity-type target) :hero)
-                          (update-hero state enemy-id :damage-taken #(+ % 8))
-                          (update-minion state (:id target) :damage-taken #(+ % 8))))
-                      state)))}
-
-   "Shadow Sensei effect"
-   {:name        "Shadow Sensei effect"
+   "Shadow Sensei"
+   {:name        "Shadow Sensei"
+    :attack      4
+    :health      4
+    :mana-cost   4
+    :effect      "Shadow Sensei effect"
+    :type        :minion
+    :class       :rogue
+    :set         :mean-streets-of-gadgetzan
+    :rarity      :rare
     :description "Battlecry: Give a Stealthed minion +2/+2."
-    :battlecry   (fn [state id player-id enemy-id target-id]
-                   (if (nil? target-id)
-                     state
+    :battlecry   (fn [{:keys [state target-id]}]
+                   (when target-id
                      (let [target (get-minion state target-id)]
-                       (if (and target
-                                (some #(= % :stealth) (:states target)))
-                         (-> state
-                             ;; FIXED: Use overrides instead of trying to modify :attack and :health
-                             (update-minion target-id :overrides
-                                            #(-> %
-                                                 (assoc :attack-bonus (+ (get % :attack-bonus 0) 2))
-                                                 (assoc :health-bonus (+ (get % :health-bonus 0) 2)))))
-                         state))))}
+                       (when (and target
+                                  (some #(= % :stealth) (:states target)))
+                         (update-minion state target-id :overrides
+                                        #(-> %
+                                             (assoc :attack-bonus (+ (get % :attack-bonus 0) 2))
+                                             (assoc :health-bonus (+ (get % :health-bonus 0) 2))))))))}
 
-   "Frothing Berserker effect"
-   {:name          "Frothing Berserker effect"
+   "Frothing Berserker"
+   {:name          "Frothing Berserker"
+    :mana-cost     3
+    :health        4
+    :attack        2
+    :effect        "Frothing Berserker effect"
+    :type          :minion
+    :class         :warrior
+    :set           :classic
+    :rarity        :rare
     :description   "Whenever a minion takes damage, gain +1 Attack."
-    :damage-minion (fn [state id player-id enemy-id target-id]
-                     ;; FIXED: Use overrides instead of trying to modify :attack
+    :damage-minion (fn [{:keys [state id]}]
                      (update-minion state id :overrides
                                     #(assoc % :attack-bonus (+ (get % :attack-bonus 0) 1))))}
 
-  "Baron Geddon effect"
-  {:name        "Baron Geddon effect"
-   :description "At the end of your turn, deal 2 damage to ALL other characters."
-   :end-of-turn (fn [state id player-id enemy-id target-id]
-                  (let [all-characters (filter #(not= (:id %) id) (get-all-characters state))]
-                    (reduce (fn [s character]
-                              (if (= (:entity-type character) :hero)
-                                (update-hero s (:id character) :damage-taken #(+ % 2))
-                                (update-minion s (:id character) :damage-taken #(+ % 2))))
-                            state
-                            all-characters)))}
+   "Baron Geddon"
+   {:name        "Baron Geddon"
+    :attack      7
+    :health      5
+    :mana-cost   7
+    :effect      "Baron Geddon effect"
+    :race        :elemental
+    :type        :minion
+    :set         :classic
+    :rarity      :legendary
+    :description "At the end of your turn, deal 2 damage to ALL other characters."
+    :end-of-turn (fn [{:keys [state id]}]
+                   (let [all-characters (filter #(not= (:id %) id) (get-all-characters state))]
+                     (reduce (fn [state character]
+                               (if (= (:entity-type character) :hero)
+                                 (update-hero state (:id character) :damage-taken #(+ % 2))
+                                 (update-minion state (:id character) :damage-taken #(+ % 2))))
+                             state
+                             all-characters)))}
 
-  "Misdirection spell effect"
-  {:name          "Misdirection spell effect"
-   :description   "Secret: When a character attacks your hero instead he attacks another random character."
-   :spell-effect  (fn [state id player-id enemy-id target-id]
-                    (add-card-to-secrets state player-id (create-card "Misdirection")))
-   :hero-attacked (fn [state id player-id enemy-id args]
-                    (let [attacker-id (:attacker-id args)
-                          attacker (get-minion state attacker-id)
-                          all-characters (filter #(not= (:id %) attacker-id)
-                                                 (filter #(not= (:id %) id)
-                                                         (get-all-characters state)))
-                          new-target (when (seq all-characters) (rand-nth all-characters))]
-                      (if (and attacker new-target)
-                        (-> state
-                            (update-in [:players player-id :secrets]
-                                       (fn [secrets]
-                                         (filter #(not= (:id %) id) secrets)))
-                            ;; Here we'd handle redirecting the attack, but that requires
-                            ;; deeper changes to the attack mechanics
-                            )
-                        state)))}
+   "Misdirection"
+   {:name          "Misdirection"
+    :mana-cost     2
+    :class         :hunter
+    :rarity        :rare
+    :set           :classic
+    :type          :spell
+    :description   "Secret: When a character attacks your hero instead he attacks another random character."
+    :spell-effect  (fn [{:keys [state player-id]}]
+                     (add-card-to-secrets state player-id (create-card "Misdirection")))
+    :hero-attacked (fn [{:keys [state id player-id args]}]
+                     (let [attacker-id (:attacker-id args)
+                           attacker (get-minion state attacker-id)
+                           all-characters (filter #(not= (:id %) attacker-id)
+                                                  (filter #(not= (:id %) id)
+                                                          (get-all-characters state)))
+                           new-target (when (seq all-characters) (rand-nth all-characters))]
+                       (when (and attacker new-target)
+                         (update-in state [:players player-id :secrets]
+                                    (fn [secrets]
+                                      (filter #(not= (:id %) id) secrets))))))}
 
-  "Raid Leader effect"
-  {:name        "Raid Leader effect"
-   :description "Your other minions have +1 Attack."
-   :aura        (fn [state id player-id enemy-id target-id]
-                  ;; This is similar to Dire Wolf Alpha but affects all friendly minions instead of just adjacent ones
-                  (let [raid-leader (get-minion state id)
-                        owner-id (:owner-id raid-leader)
-                        friendly-minions (filter #(not= (:id %) id) (get-minions state owner-id))]
-                    (reduce (fn [s minion]
-                              (update-minion s (:id minion) :attack inc))
-                            state
-                            friendly-minions)))}
 
-  "Shudderwock effect"
-  {:name        "Shudderwock effect"
-   :description "Battlecry: Repeat all other Battlecries from cards you played this game (targets chosen randomly)."
-   :battlecry   (fn [state id player-id enemy-id target-id]
-                  ;; This would require tracking all battlecries played,
-                  ;; which isn't implemented in the current game state
-                  ;; For a simplified version:
-                  (let [minions-with-battlecries (filter #(contains? (get-definition %) :battlecry)
-                                                         (keys (get-definitions)))]
-                    ;; For demonstration, just trigger one random battlecry
-                    (if (seq minions-with-battlecries)
-                      (let [random-battlecry (rand-nth minions-with-battlecries)
-                            battlecry-fn (get-in (get-definition random-battlecry) [:battlecry])]
-                        (when battlecry-fn
-                          (battlecry-fn state id player-id enemy-id nil)))
-                      state)))}
+   "Raid Leader"
+   {:name        "Raid Leader"
+    :attack      2
+    :health      2
+    :mana-cost   3
+    :effect      "Raid Leader effect"
+    :set         :basic
+    :type        :minion
+    :description "Your other minions have +1 Attack."
+    :aura        (fn [{:keys [state id]}]
+                   (let [raid-leader (get-minion state id)
+                         owner-id (:owner-id raid-leader)
+                         friendly-minions (filter #(not= (:id %) id) (get-minions state owner-id))]
+                     (reduce (fn [state minion]
+                               (update-minion state (:id minion) :attack inc))
+                             state
+                             friendly-minions)))}
 
-  "Unearthed Raptor effect"
-  {:name        "Unearthed Raptor effect"
-   :description "Battlecry: Choose a friendly minion. Gain a copy of its Deathrattle effect."
-   :battlecry   (fn [state id player-id enemy-id target-id]
-                  (if (nil? target-id)
-                    state
-                    (let [target (get-minion state target-id)
-                          target-effects (:effects target)]
-                      (if (and target (= (:owner-id target) player-id))
-                        ;; Find deathrattle effects and copy them
-                        (let [deathrattle-effects (filter #(contains? (get-definition %) :deathrattle) target-effects)]
-                          (if (seq deathrattle-effects)
-                            (update-minion state id :effects
-                                           (fn [effects] (concat (or effects []) deathrattle-effects)))
-                            state))
-                        state))))}
-  })
+   "Shudderwock"
+   {:name        "Shudderwock"
+    :attack      6
+    :health      6
+    :mana-cost   9
+    :effect      "Shudderwock effect"
+    :type        :minion
+    :class       :shaman
+    :set         :the-witchwood
+    :rarity      :legendary
+    :description "Battlecry: Repeat all other Battlecries from cards you played this game (targets chosen randomly)."
+    :battlecry   (fn [{:keys [state id player-id enemy-id]}]
+                   (let [minions-with-battlecries (filter #(contains? (get-definition %) :battlecry)
+                                                          (keys (get-definitions)))]
+                     (if (seq minions-with-battlecries)
+                       (let [random-battlecry (rand-nth minions-with-battlecries)
+                             battlecry-fn (get-in (get-definition random-battlecry) [:battlecry])]
+                         (when battlecry-fn
+                           (battlecry-fn {:state state :id id :player-id player-id :enemy-id enemy-id :target-id nil})))
+                       state)))}
+
+   "Unearthed Raptor"
+   {:name        "Unearthed Raptor"
+    :attack      3
+    :health      4
+    :mana-cost   3
+    :effect      "Unearthed Raptor effect"
+    :type        :minion
+    :class       :rogue
+    :set         :the-league-of-explorers
+    :rarity      :rare
+    :description "Battlecry: Choose a friendly minion. Gain a copy of its Deathrattle effect."
+    :battlecry   (fn [{:keys [state id target-id player-id]}]
+                   (when target-id
+                     (let [target (get-minion state target-id)
+                           target-effects (:effects target)]
+                       (when (and target (= (:owner-id target) player-id))
+                         (let [deathrattle-effects (filter #(contains? (get-definition %) :deathrattle) target-effects)]
+                           (when (seq deathrattle-effects)
+                             (update-minion state id :effects
+                                            (fn [effects] (concat (or effects []) deathrattle-effects)))))))))}
+   })
 
 ;; Add all the definitions to the game
 (add-definitions! card-definitions)
-(add-definitions! effect-definitions)

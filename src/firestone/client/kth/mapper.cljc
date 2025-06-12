@@ -42,7 +42,24 @@
   (let [hero-def (def/get-definition (:name hero))
         hero-power-name (:hero-power hero-def)
         hero-power-def (when hero-power-name (def/get-definition hero-power-name))
-        hero-power-cost (when hero-power-def (:mana-cost hero-power-def))]
+        hero-power-cost (when hero-power-def (:mana-cost hero-power-def))
+
+        ;; FIXED: Calculate valid targets for hero powers that need them
+        hero-power-targets (if (and hero-power-name
+                                    (construct/hero-can-use-power? game player-id hero))
+                             (cond
+                               ;; Fireblast can target any character (like attacks)
+                               (= hero-power-name "Fireblast")
+                               (construct/get-attackable-ids game player-id)
+
+                               ;; Life Tap doesn't need targets
+                               (= hero-power-name "Life Tap")
+                               []
+
+                               ;; Default: no targets
+                               :else [])
+                             [])]
+
     {:armor            0
      :owner-id         player-id
      :entity-type      :hero
@@ -56,7 +73,6 @@
      :name             (:name hero)
      :states           []
      :valid-attack-ids []
-     ;; ADDED: Filter effects for heroes too (if they have any)
      :effects          (filter-serializable-effects (:effects hero))
      :hero-power       {:name               (or hero-power-name "Unknown")
                         :description        (or (:description hero-power-def) "")
@@ -70,9 +86,8 @@
                                               false)
                         :owner-id           (:id hero)
                         :has-used-your-turn (or (:has-used-your-turn hero) false)
-                        :valid-target-ids   (if hero-power-name
-                                              (construct/get-valid-target-ids game player-id hero)
-                                              [])}}))
+                        ;; FIXED: This should contain valid targets for targeting hero powers
+                        :valid-target-ids   hero-power-targets}}))
 
 (defn compute-can-attack
   "Computes whether a minion can attack based on current game state"

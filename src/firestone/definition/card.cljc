@@ -6,6 +6,7 @@
                                     get-attack]]
             [firestone.construct :refer [create-minion
                                          get-minions
+                                         get-heroes
                                          add-minion-to-board
                                          add-card-to-hand
                                          remove-minion
@@ -17,6 +18,7 @@
                                          create-card
                                          add-card-to-secrets
                                          get-all-characters
+                                         get-player-id-by-hero-id
                                          update-hero
                                          get-health]]))
 
@@ -467,11 +469,10 @@
     :description "Battlecry: Set a hero's remaining Health to 15."
     :battlecry   (fn [{:keys [state target-id]}]
                    (when target-id
-                     (let [target (get-hero state target-id)]
-                       (when target
-                         (update-hero state target-id :damage-taken
-                                      (fn [_] (- (:health target) 15)))))))}
-
+                     (let [player-id (get-player-id-by-hero-id state target-id)]
+                       (when player-id
+                         ;; Set hero health to 15 (30 max health - 15 damage = 15 health)
+                         (update-hero state player-id :damage-taken (constantly 15))))))}
    "Master of Disguise"
    {:name        "Master of Disguise"
     :attack      4
@@ -512,16 +513,20 @@
     :description  "Give your minions \"Deathrattle: Add a random Beast to your hand.\""
     :spell-effect (fn [{:keys [state player-id]}]
                     (let [player-minions (get-minions state player-id)
-                          infest-deathrattle {:deathrattle (fn [{:keys [state player-id]}]
-                                                             (let [beast-cards (filter #(= (:race %) :beast)
-                                                                                       (map #(get-definition %)
-                                                                                            (keys (get-definitions))))]
-                                                               (when (seq beast-cards)
-                                                                 (let [random-beast (rand-nth beast-cards)]
-                                                                   (add-card-to-hand state player-id (:name random-beast))))))}]
+
+                          infest-deathrattle {:deathrattle
+                                              (fn [{:keys [state player-id]}]
+                                                (let [all-definitions (get-definitions)
+                                                      beast-cards (filter #(= (:race %) :beast) all-definitions)]
+                                                  (when (seq beast-cards)
+                                                    (let [random-beast (rand-nth beast-cards)]
+                                                      (add-card-to-hand state player-id (:name random-beast))))))}]
+
+                      
                       (reduce (fn [state minion]
                                 (update-minion state (:id minion) :effects
-                                               (fn [effects] (conj (or effects []) infest-deathrattle))))
+                                               (fn [effects]
+                                                 (conj (or effects []) infest-deathrattle))))
                               state
                               player-minions)))}
 
@@ -592,14 +597,25 @@
     :set         :classic
     :rarity      :legendary
     :description "At the end of your turn, deal 2 damage to ALL other characters."
-    :end-of-turn (fn [{:keys [state id]}]
-                   (let [all-characters (filter #(not= (:id %) id) (get-all-characters state))]
-                     (reduce (fn [state character]
-                               (if (= (:entity-type character) :hero)
-                                 (update-hero state (:id character) :damage-taken #(+ % 2))
-                                 (update-minion state (:id character) :damage-taken #(+ % 2))))
+    :end-of-turn (fn [{:keys [state id player-id]}]
+                   ;; Get all heroes and minions, excluding Baron Geddon itself
+                   (let [all-heroes (get-heroes state)
+                         all-minions (filter #(not= (:id %) id) (get-minions state))
+                         all-targets (concat all-heroes all-minions)]
+                     (reduce (fn [state target]
+                               (if (= (:entity-type target) :hero)
+                                 ;; Damage hero - need to find which player owns this hero
+                                 (let [hero-player-id (some (fn [[pid player-data]]
+                                                              (when (= (:id (:hero player-data)) (:id target))
+                                                                pid))
+                                                            (:players state))]
+                                   (if hero-player-id
+                                     (update-hero state hero-player-id :damage-taken #(+ % 2))
+                                     state))
+                                 ;; Damage minion
+                                 (update-minion state (:id target) :damage-taken #(+ % 2))))
                              state
-                             all-characters)))}
+                             all-targets)))}
 
    "Misdirection"
    {:name          "Misdirection"

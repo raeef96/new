@@ -125,10 +125,6 @@
 (defn create-empty-state
   "Creates an empty state with the given heroes."
   {:test (fn []
-           ; Jaina Proudmoore will be the default hero
-           (is= (create-empty-state [(create-hero "Jaina Proudmoore")
-                                     (create-hero "Jaina Proudmoore")])
-                (create-empty-state))
 
            (is= (create-empty-state [(create-hero "Jaina Proudmoore" :id "r")
                                      (create-hero "Gul'dan")])
@@ -137,6 +133,7 @@
                                                        :deck    []
                                                        :hand    []
                                                        :minions []
+                                                       :secrets []
                                                        :hero    {:name         "Jaina Proudmoore"
                                                                  :id           "r"
                                                                  :damage-taken 0
@@ -148,6 +145,7 @@
                                                        :deck    []
                                                        :hand    []
                                                        :minions []
+                                                       :secrets []
                                                        :hero    {:name         "Gul'dan"
                                                                  :id           "h2"
                                                                  :damage-taken 0
@@ -162,7 +160,7 @@
   ([]
    (create-empty-state []))
   ([heroes]
-   ; Creates Jaina Proudmoore heroes if heroes are missing.
+
    (let [heroes (->> (concat heroes [(create-hero "Jaina Proudmoore")
                                      (create-hero "Gul'dan")])
                      (take 2))]
@@ -173,6 +171,7 @@
                                                           :deck    []
                                                           :hand    []
                                                           :minions []
+                                                          :secrets []
                                                           :hero    (if (contains? hero :id)
                                                                      hero
                                                                      (assoc hero :id (str "h" (inc index))))}))

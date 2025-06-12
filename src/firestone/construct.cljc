@@ -989,8 +989,28 @@
         minions (get-minions state)]
     (concat heroes minions)))
 
+(defn apply-damage-only
+  "Applies damage without checking for death. Returns updated state."
+  [state target-id damage]
+  (let [target (get-character state target-id)]
+    (if (= (:entity-type target) :hero)
+      (let [player-id (get-player-id-by-hero-id state target-id)]
+        (update-hero state player-id :damage-taken #(+ % damage)))
+      (update-minion state target-id :damage-taken #(+ % damage)))))
+
+(defn remove-dead-minions
+  "Removes all minions that have health <= 0. Returns updated state."
+  [state minion-ids]
+  (reduce (fn [state minion-id]
+            (let [minion (get-minion state minion-id)]
+              (if (and minion (<= (get-health minion) 0))
+                (remove-minion state minion-id)
+                state)))
+          state
+          minion-ids))
+
 (defn handle-minion-attack-on-minion
-  "Handles minion vs. minion combat"
+  "Handles minion vs. minion combat using helper functions"
   [{:keys [state attacker-id target-id]}]
   (let [attacker (get-minion state attacker-id)
         target (get-minion state target-id)
@@ -1001,23 +1021,22 @@
         target-attack (or (:attack target-def) 0)
 
         state (-> state
-                  (update-minion attacker-id :damage-taken #(+ % target-attack))
-                  (update-minion target-id :damage-taken #(+ % attacker-attack))
                   (update-minion attacker-id :attacks-performed-this-turn inc)
-                  (update-minion attacker-id :can-attack nil))
-        state (effects-parser state
-                              [(get-minion state attacker-id)
-                               (get-minion state target-id)]
-                              attacker-player-id
-                              :damage-minion)]
-    (let [updated-attacker (get-minion state attacker-id)
-          updated-target (get-minion state target-id)]
-      (cond-> state
-              (and updated-attacker (<= (get-health updated-attacker) 0))
-              (remove-minion attacker-id)
+                  (update-minion attacker-id :can-attack nil)
+                  (apply-damage-only target-id attacker-attack)
+                  (apply-damage-only attacker-id target-attack))
 
-              (and updated-target (<= (get-health updated-target) 0))
-              (remove-minion target-id)))))
+        surviving-minions (filter identity
+                                  [(get-minion state attacker-id)
+                                   (get-minion state target-id)])
+        state (when (seq surviving-minions)
+                (effects-parser state
+                                surviving-minions
+                                attacker-player-id
+                                :damage-minion))
+
+        state (remove-dead-minions state [attacker-id target-id])]
+    state))
 
 (defn handle-minion-attack-on-hero
   "Handles minion vs. hero combat"
@@ -1191,3 +1210,16 @@
          (= (:player-id-in-turn state) player-id)
          (or (empty? current-secrets)
              (not (some #(= (:name %) (:name card)) current-secrets))))))
+
+(defn deal-damage-and-check-death
+  "Deals damage to a character and removes it if it dies. Returns updated state."
+  [state target-id damage]
+  (let [target (get-character state target-id)]
+    (if (= (:entity-type target) :hero)
+      (let [player-id (get-player-id-by-hero-id state target-id)]
+        (update-hero state player-id :damage-taken #(+ % damage)))
+      (let [state (update-minion state target-id :damage-taken #(+ % damage))
+            updated-minion (get-minion state target-id)]
+        (if (and updated-minion (<= (get-health updated-minion) 0))
+          (remove-minion state target-id)
+          state)))))

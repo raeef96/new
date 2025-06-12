@@ -20,7 +20,7 @@
                                          get-all-characters
                                          get-player-id-by-hero-id
                                          update-hero
-                                         get-health]]))
+                                         deal-damage-and-check-death]]))
 
 ;; Card definitions with embedded effect functions
 (def card-definitions
@@ -103,24 +103,12 @@
     :type         :spell
     :spell-effect (fn [{:keys [state player-id enemy-id]}]
                     (let [enemy-minions (get-minions state enemy-id)
-                          state (update-hero state enemy-id :damage-taken #(+ % 2))
-                          state (reduce
-                                  (fn [state minion]
-                                    (update-minion state (:id minion) :damage-taken #(+ % 2)))
-                                  state
-                                  enemy-minions)
-                          state (reduce
-                                  (fn [state minion-id]
-                                    (let [minion (get-minion state minion-id)]
-                                      (if minion
-                                        (let [current-health (get-health state minion-id)]
-                                          (if (<= current-health 0)
-                                            (remove-minion state minion-id)
-                                            state))
-                                        state)))
-                                  state
-                                  (map :id enemy-minions))]
-                      state))}
+                          enemy-hero (get-hero state enemy-id)
+                          all-enemy-targets (cons enemy-hero enemy-minions)]
+                      (reduce (fn [state target]
+                                (deal-damage-and-check-death state (:id target) 2))
+                              state
+                              all-enemy-targets)))}
 
    "Kill Command"
    {:name         "Kill Command"
@@ -132,23 +120,8 @@
     :spell-effect (fn [{:keys [state player-id target-id]}]
                     (when target-id
                       (let [has-beast (some #(= (:race %) :beast) (get-minions state player-id))
-                            damage (if has-beast 5 3)
-                            target (get-minion state target-id)]
-                        (cond
-                          (nil? target) state
-                          (= (:entity-type target) :minion)
-                          (let [state (update-minion state target-id :damage-taken #(+ % damage))
-                                target (get-minion state target-id)]
-                            (when target
-                              (let [definition (get-definition (:name target))
-                                    max-health (or (:health definition) 1)
-                                    is-dead (>= (:damage-taken target) max-health)]
-                                (if is-dead
-                                  (remove-minion state target-id)
-                                  state))))
-                          (= (:entity-type target) :hero)
-                          (update-hero state (:owner-id target) :damage-taken #(+ % damage))
-                          :else state))))}
+                            damage (if has-beast 5 3)]
+                        (deal-damage-and-check-death state target-id damage))))}
 
    "Silver Hand Knight"
    {:name        "Silver Hand Knight"
@@ -229,12 +202,12 @@
                             remaining 3]
                        (if (zero? remaining)
                          state
-                         (let [target (rand-nth all-characters)]
-                           (recur
-                             (if (= (:entity-type target) :hero)
-                               (update-hero state (:id target) :damage-taken inc)
-                               (update-minion state (:id target) :damage-taken inc))
-                             (dec remaining)))))))}
+                         (let [current-characters (filter #(not= (:id %) id) (get-all-characters state))
+                               target (when (seq current-characters) (rand-nth current-characters))]
+                           (if target
+                             (recur (deal-damage-and-check-death state (:id target) 1)
+                                    (dec remaining))
+                             state))))))}
 
    "Twilight Drake"
    {:name        "Twilight Drake"
@@ -338,15 +311,14 @@
     :race        :mech
     :set         :goblins-vs-gnomes
     :description "Deathrattle: Deal 1-4 damage to a random enemy."
-    :deathrattle (fn [{:keys [state player-id enemy-id]}]
+    :deathrattle (fn [{:keys [state enemy-id]}]
                    (let [damage (inc (rand-int 4))
                          enemy-minions (get-minions state enemy-id)
                          enemy-hero (get-hero state enemy-id)
-                         targets (cons enemy-hero enemy-minions)
-                         target (rand-nth targets)]
-                     (if (= (:entity-type target) :hero)
-                       (update-hero state enemy-id :damage-taken #(+ % damage))
-                       (update-minion state (:id target) :damage-taken #(+ % damage)))))}
+                         targets (cons enemy-hero enemy-minions)]
+                     (when (seq targets)
+                       (let [target (rand-nth targets)]
+                         (deal-damage-and-check-death state (:id target) damage)))))}
 
    "Steward"
    {:name      "Steward"
@@ -368,11 +340,10 @@
     :description   "After you summon a minion, deal 1 damage to a random enemy."
     :summon-minion (fn [{:keys [state enemy-id]}]
                      (let [all-enemy-characters (cons (get-hero state enemy-id)
-                                                      (get-minions state enemy-id))
-                           target (rand-nth all-enemy-characters)]
-                       (if (= (:entity-type target) :hero)
-                         (update-hero state enemy-id :damage-taken inc)
-                         (update-minion state (:id target) :damage-taken inc))))}
+                                                      (get-minions state enemy-id))]
+                       (when (seq all-enemy-characters)
+                         (let [target (rand-nth all-enemy-characters)]
+                           (deal-damage-and-check-death state (:id target) 1)))))}
 
    "Questing Adventurer"
    {:name        "Questing Adventurer"
@@ -416,14 +387,14 @@
     :description    "Secret: When your hero is attacked deal 2 damage to all enemies."
     :spell-effect   (fn [{:keys [state player-id]}]
                       (add-card-to-secrets state player-id (create-card "Explosive Trap")))
-    :hero-attacked  (fn [{:keys [state id player-id enemy-id args]}]
+    :hero-attacked  (fn [{:keys [state id player-id enemy-id]}]
                       (let [enemy-minions (get-minions state enemy-id)
                             state (update-in state [:players player-id :secrets]
                                              (fn [secrets]
                                                (filter #(not= (:id %) id) secrets)))
                             state (update-hero state enemy-id :damage-taken #(+ % 2))
                             state (reduce (fn [state minion]
-                                            (update-minion state (:id minion) :damage-taken #(+ % 2)))
+                                            (deal-damage-and-check-death state (:id minion) 2))
                                           state
                                           enemy-minions)]
                         state))}
@@ -522,7 +493,7 @@
                                                     (let [random-beast (rand-nth beast-cards)]
                                                       (add-card-to-hand state player-id (:name random-beast))))))}]
 
-                      
+
                       (reduce (fn [state minion]
                                 (update-minion state (:id minion) :effects
                                                (fn [effects]
@@ -546,9 +517,7 @@
                                                 (get-minions state enemy-id))]
                      (when (seq enemy-characters)
                        (let [target (rand-nth enemy-characters)]
-                         (if (= (:entity-type target) :hero)
-                           (update-hero state enemy-id :damage-taken #(+ % 8))
-                           (update-minion state (:id target) :damage-taken #(+ % 8)))))))}
+                         (deal-damage-and-check-death state (:id target) 8)))))}
 
    "Shadow Sensei"
    {:name        "Shadow Sensei"
@@ -597,23 +566,12 @@
     :set         :classic
     :rarity      :legendary
     :description "At the end of your turn, deal 2 damage to ALL other characters."
-    :end-of-turn (fn [{:keys [state id player-id]}]
-                   ;; Get all heroes and minions, excluding Baron Geddon itself
+    :end-of-turn (fn [{:keys [state id]}]
                    (let [all-heroes (get-heroes state)
                          all-minions (filter #(not= (:id %) id) (get-minions state))
                          all-targets (concat all-heroes all-minions)]
                      (reduce (fn [state target]
-                               (if (= (:entity-type target) :hero)
-                                 ;; Damage hero - need to find which player owns this hero
-                                 (let [hero-player-id (some (fn [[pid player-data]]
-                                                              (when (= (:id (:hero player-data)) (:id target))
-                                                                pid))
-                                                            (:players state))]
-                                   (if hero-player-id
-                                     (update-hero state hero-player-id :damage-taken #(+ % 2))
-                                     state))
-                                 ;; Damage minion
-                                 (update-minion state (:id target) :damage-taken #(+ % 2))))
+                               (deal-damage-and-check-death state (:id target) 2))
                              state
                              all-targets)))}
 
